@@ -1,0 +1,21 @@
+# Secrets — never commit these
+SECRET.txt
+.env
+
+# Runtime data
+data/
+logs/
+.pids/
+*.log
+*.pid
+
+# Dependencies
+node_modules/
+
+# Music files (add your own)
+music/*.mp3
+music/*.wav
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YardPets3</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; cursor:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>") 0 0, none !important; }
+    html, body, :root, #overlay-root { cursor:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>") 0 0, none !important; }
+    html, body {
+      width:100vw; height:100vh; overflow:hidden;
+      background:#000;
+      font-family:'Segoe UI', system-ui, sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    #boot-status {
+      position:absolute; bottom:48px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,.4); font-size:13px; font-family:monospace;
+      pointer-events:none; z-index:999; transition:opacity 1.5s;
+    }
+    #overlay-root {
+      position:relative; width:1920px; height:1080px; overflow:hidden;
+      transform-origin:top left;
+      transform:scale(var(--scene-scale,1));
+    }
+    #yard-mount     { position:absolute; inset:0; z-index:10; }
+    #battle-mount   { position:absolute; inset:0; z-index:20; pointer-events:none; }
+    #ticker-mount   { position:absolute; top:0; left:0; right:0; z-index:30; pointer-events:none; }
+    #settings-mount { position:absolute; inset:0; z-index:100; pointer-events:none; }
+    #stream-mount   { position:absolute; top:52px; right:16px; z-index:90; pointer-events:none; }
+    #queue-mount    { position:absolute; top:50%; left:16px; transform:translateY(-50%); z-index:90; pointer-events:none; }
+  </style>
+</head>
+<body>
+  <div id="overlay-root">
+    <div id="yard-mount"></div>
+    <div id="battle-mount"></div>
+    <div id="ticker-mount"></div>
+    <div id="settings-mount"></div>
+    <div id="stream-mount"></div>
+    <div id="queue-mount"></div>
+    <div id="boot-status">⏳ Loading...</div>
+  </div>
+  <script>
+    // Scale the 1920x1080 scene to fit any stream resolution
+    (function() {
+      function apply() {
+        var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+        document.documentElement.style.setProperty('--scene-scale', s);
+      }
+      apply();
+      window.addEventListener('resize', apply);
+    })();
+
+
+  </script>
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>

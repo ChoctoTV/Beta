@@ -1,0 +1,669 @@
+[
+  {
+    "sheet": 0,
+    "sheetWidth": 8432,
+    "sheetHeight": 7378,
+    "sprites": [
+      {
+        "name": "Chance",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 0,
+          "row": 0
+        },
+        "frame": {
+          "x": 4,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Choc",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 1,
+          "row": 0
+        },
+        "frame": {
+          "x": 1058,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Flora",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 2,
+          "row": 0
+        },
+        "frame": {
+          "x": 2112,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Flurry",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 3,
+          "row": 0
+        },
+        "frame": {
+          "x": 3166,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Fortune",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 4,
+          "row": 0
+        },
+        "frame": {
+          "x": 4220,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Frost",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 5,
+          "row": 0
+        },
+        "frame": {
+          "x": 5274,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Hershey",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 6,
+          "row": 0
+        },
+        "frame": {
+          "x": 6328,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Leaf",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 7,
+          "row": 0
+        },
+        "frame": {
+          "x": 7382,
+          "y": 4,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "OJ",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 0,
+          "row": 1
+        },
+        "frame": {
+          "x": 4,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Prince",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 1,
+          "row": 1
+        },
+        "frame": {
+          "x": 1058,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Prospect",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 2,
+          "row": 1
+        },
+        "frame": {
+          "x": 2112,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Rose",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 3,
+          "row": 1
+        },
+        "frame": {
+          "x": 3166,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Serendipity",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 4,
+          "row": 1
+        },
+        "frame": {
+          "x": 4220,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Smokie",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 5,
+          "row": 1
+        },
+        "frame": {
+          "x": 5274,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Snoop",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 6,
+          "row": 1
+        },
+        "frame": {
+          "x": 6328,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Snow",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 7,
+          "row": 1
+        },
+        "frame": {
+          "x": 7382,
+          "y": 1058,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Stella",
+        "rarity": "Common",
+        "sheet": 0,
+        "cell": {
+          "col": 0,
+          "row": 2
+        },
+        "frame": {
+          "x": 4,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "allenkill",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 1,
+          "row": 2
+        },
+        "frame": {
+          "x": 1058,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "connman",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 2,
+          "row": 2
+        },
+        "frame": {
+          "x": 2112,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "harley",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 3,
+          "row": 2
+        },
+        "frame": {
+          "x": 3166,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "khag",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 4,
+          "row": 2
+        },
+        "frame": {
+          "x": 4220,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "missi",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 5,
+          "row": 2
+        },
+        "frame": {
+          "x": 5274,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "raichu",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 6,
+          "row": 2
+        },
+        "frame": {
+          "x": 6328,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "squeamy",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 7,
+          "row": 2
+        },
+        "frame": {
+          "x": 7382,
+          "y": 2112,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "toasties",
+        "rarity": "Epic",
+        "sheet": 0,
+        "cell": {
+          "col": 0,
+          "row": 3
+        },
+        "frame": {
+          "x": 4,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "anakura",
+        "rarity": "Legendary",
+        "sheet": 0,
+        "cell": {
+          "col": 1,
+          "row": 3
+        },
+        "frame": {
+          "x": 1058,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "elle",
+        "rarity": "Legendary",
+        "sheet": 0,
+        "cell": {
+          "col": 2,
+          "row": 3
+        },
+        "frame": {
+          "x": 2112,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "gummie",
+        "rarity": "Legendary",
+        "sheet": 0,
+        "cell": {
+          "col": 3,
+          "row": 3
+        },
+        "frame": {
+          "x": 3166,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "kevo",
+        "rarity": "Legendary",
+        "sheet": 0,
+        "cell": {
+          "col": 4,
+          "row": 3
+        },
+        "frame": {
+          "x": 4220,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "secretnftgolddog",
+        "rarity": "Legendary",
+        "sheet": 0,
+        "cell": {
+          "col": 5,
+          "row": 3
+        },
+        "frame": {
+          "x": 5274,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "secretnftpurple",
+        "rarity": "Legendary",
+        "sheet": 0,
+        "cell": {
+          "col": 6,
+          "row": 3
+        },
+        "frame": {
+          "x": 6328,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "AuqaChoc",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 7,
+          "row": 3
+        },
+        "frame": {
+          "x": 7382,
+          "y": 3166,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Chong",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 0,
+          "row": 4
+        },
+        "frame": {
+          "x": 4,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Drake",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 1,
+          "row": 4
+        },
+        "frame": {
+          "x": 1058,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "dumplins",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 2,
+          "row": 4
+        },
+        "frame": {
+          "x": 2112,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Electo",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 3,
+          "row": 4
+        },
+        "frame": {
+          "x": 3166,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Flame",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 4,
+          "row": 4
+        },
+        "frame": {
+          "x": 4220,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Hubiscus",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 5,
+          "row": 4
+        },
+        "frame": {
+          "x": 5274,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "k8",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 6,
+          "row": 4
+        },
+        "frame": {
+          "x": 6328,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "loopty",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 7,
+          "row": 4
+        },
+        "frame": {
+          "x": 7382,
+          "y": 4220,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "marlov",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 0,
+          "row": 5
+        },
+        "frame": {
+          "x": 4,
+          "y": 5274,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Moonshot",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 1,
+          "row": 5
+        },
+        "frame": {
+          "x": 1058,
+          "y": 5274,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "Razor",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 2,
+          "row": 5
+        },
+        "frame": {
+          "x": 2112,
+          "y": 5274,
+          "width": 1024,
+          "height": 1024
+        }
+      },
+      {
+        "name": "The OG",
+        "rarity": "Rare",
+        "sheet": 0,
+        "cell": {
+          "col": 3,
+          "row": 5
+        },
+        "frame": {
+          "x": 3166,
+          "y": 5274,
+          "width": 1024,
+          "height": 1024
+        }
+      }
+    ]
+  }
+]

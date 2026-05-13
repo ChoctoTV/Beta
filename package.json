@@ -1,0 +1,20 @@
+{
+  "name": "choctotv",
+  "version": "4.0.0",
+  "description": "ChoctoTV YardPets stream overlay",
+  "main": "app.js",
+  "engines": { "node": ">=18.0.0" },
+  "scripts": {
+    "start":  "node app.js",
+    "setup":  "node setup.js",
+    "stream": "node stream.js",
+    "music":  "node music.js"
+  },
+  "dependencies": {
+    "cors":    "^2.8.5",
+    "dotenv":  "^16.4.5",
+    "express": "^4.19.2",
+    "tmi.js":  "^1.8.5",
+    "ws":      "^8.17.0"
+  }
+}
