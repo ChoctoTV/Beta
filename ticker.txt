@@ -1,0 +1,53 @@
+# ChoctoTV Ticker Content
+# Edit this file to update the scrolling ticker without touching code.
+# Format:  LABEL | description
+# Lines starting with # are comments and are ignored.
+# Blank lines are ignored.
+#
+# Dynamic variables (substituted at runtime from Config):
+#   {vend_sticks_rate}   {vend_balls_rate}   {vend_moons_rate}
+#   {forge_balls_cost}   {forge_moons_cost}
+#   {chest_min_lock}     {chest_max_lock}
+#   Any other config key in curly braces will be substituted automatically.
+
+# ── Game commands ─────────────────────────────────────────────────────────────
+🎯 !toss | earn Choctobits 🍫
+🎾 !throw | earn Choctobits 🍫
+⛏️ !dig | earn Choctobits 🍫
+🐾 !walk | send your pup for a walk
+🎣 !fish | cast a line — maybe catch someone else's pup!
+⚔️ !battle | enter Puppy Wars
+⚔️ !gauntlet | 1v1 gauntlet battle
+
+# ── Economy ───────────────────────────────────────────────────────────────────
+💰 !balance | check your Choctobits
+🎒 !inv | check your full inventory (also: inventory, wallet)
+💵 !cashout | redeem Choctobits for Chocto
+
+# ── Vend & forge ─────────────────────────────────────────────────────────────
+🪵 !vend sticks | sell sticks — {vend_sticks_rate}🍫 each
+🎾 !vend balls | sell balls — {vend_balls_rate}🍫 each
+🌙 !vend moons | sell moons — {vend_moons_rate}🍫 each
+🏪 !vend all | sell your entire inventory at once
+⚗️ !forgeballs | {forge_balls_cost} 🪵 → 1 🎾
+🔮 !forgemoons | {forge_moons_cost} 🎾 → 1 🌙
+
+# ── Peanut butter jar ────────────────────────────────────────────────────────
+👅 !lick | lick the peanut butter jar for 🍫 — common pups get 1 lick, legendary get 4!
+🥣 !feed | fill the food bowl +10% — earns 🍫 for your team
+💧 !water | fill the water bowl +10% — earns 🍫 for your team
+
+# ── Morale ───────────────────────────────────────────────────────────────────
+🐾 Morale Bonus | drops every 10 min — more active players = bigger payout!
+🥜 Keep the bowls full | empty bowls reduce the morale bonus for everyone
+
+# ── Lurk & GBM ───────────────────────────────────────────────────────────────
+😴 !lurk | auto-play mode — earn passively while you're away
+🎮 !GBM Good/Ball/Moon | make your pick — payout every 10 minutes
+
+# ── Queue ─────────────────────────────────────────────────────────────────────
+📊 !queues | show the action queue board (hidden by default)
+
+# ── NFT / Fav pup ────────────────────────────────────────────────────────────
+🐶 !setfav | link your NFT — it appears in ALL your game animations!
+🐶 !checkfav | view your fav pup card

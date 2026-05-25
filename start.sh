@@ -27,9 +27,43 @@ warn() { echo -e "${YL}  ⚠${NC} $*"; }
 err()  { echo -e "${RD}  ✗${NC} $*"; }
 hdr()  { echo -e "\n${WT}$*${NC}"; }
 
+
+# ── Load Secret file directly (before services start) ──────────────────────────
+load_secret() {
+  local sf=""
+  for candidate in "$DIR/Secret(live).txt" "$DIR/Secret(beta).txt"; do
+    [[ -f "$candidate" ]] && sf="$candidate" && break
+  done
+  if [[ -z "$sf" ]]; then
+    for f in "$DIR"/[Ss]ecret*.txt; do [[ -f "$f" ]] && sf="$f" && break; done
+  fi
+  if [[ -z "$sf" ]]; then
+    for candidate in "$DIR/vault/Secret(live).txt" "$DIR/vault/Secret(beta).txt"; do
+      [[ -f "$candidate" ]] && sf="$candidate" && break
+    done
+  fi
+  if [[ -n "$sf" ]]; then
+    set -a
+    while IFS= read -r line; do
+      [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+      line="${line%%  #*}"; line="${line%%	#*}"
+      [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && export "$line" 2>/dev/null || true
+    done < "$sf"
+    set +a
+  fi
+}
+
 # ── Load .env ──────────────────────────────────────────────────────────────────
 load_env() {
-  [[ -f "$DIR/.env" ]] && { set -a; source "$DIR/.env"; set +a; } || true
+  [[ -f "$DIR/.env" ]] || return 0
+  while IFS='=' read -r key rest; do
+    # Skip blank lines, comments, and keys that aren't valid shell identifiers
+    [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    # Skip values that look like URLs (contain ://) — these break bash source
+    [[ "$rest" =~ :// ]] && continue
+    export "${key}=${rest}"
+  done < "$DIR/.env"
 }
 
 # ── Kill a PID file ────────────────────────────────────────────────────────────
@@ -60,11 +94,7 @@ launch() {
 # ── Stop all ───────────────────────────────────────────────────────────────────
 stop_all() {
   info "Stopping all services..."
-  for svc in app stream music; do kill_pid "$svc"; done
-  pkill -f "node $DIR/app.js"    2>/dev/null || true
-  pkill -f "node $DIR/stream.js" 2>/dev/null || true
-  pkill -f "node $DIR/music.js"  2>/dev/null || true
-  sleep 1
+  ensure_clean
   ok "All stopped"
 }
 
@@ -72,7 +102,7 @@ stop_all() {
 show_status() {
   hdr "  ChoctoTV — Service Status"
   echo ""
-  for svc in app stream music; do
+  for svc in app stream music pupcore teller; do
     local f="$PIDS/$svc.pid"
     if [[ -f "$f" ]]; then
       local pid; pid=$(cat "$f")
@@ -105,7 +135,7 @@ open_viewer() {
     ok "Viewer open (pid $!) — press Q to close"
   else
     warn "ffplay not found — opening overlay in browser"
-    local port="${OVERLAY_PORT:-8080}"
+    local port="${API_PORT:-3000}"
     xdg-open "http://localhost:$port" 2>/dev/null &
   fi
 }
@@ -250,14 +280,40 @@ REMOTE
 
 # ── Watchdog ───────────────────────────────────────────────────────────────────
 start_watchdog() {
+  # Crash-loop guard: if a service crashes 3+ times in 60 seconds, give up
+  # restarting it so the user can Ctrl+C without fighting the restart loop.
+  declare -A crash_count
+  declare -A crash_first
+  declare -A crash_disabled
+
   while true; do
     sleep 15
     for svc in app music; do
+      [[ "${crash_disabled[$svc]:-0}" == "1" ]] && continue
       local f="$PIDS/$svc.pid"
       [[ -f "$f" ]] || continue
       local pid; pid=$(cat "$f")
       if ! kill -0 "$pid" 2>/dev/null; then
-        echo -e "\n${YL}  ⚠${NC} $svc crashed — restarting..."
+        local now=$(date +%s)
+        local first=${crash_first[$svc]:-$now}
+        local count=${crash_count[$svc]:-0}
+        # Reset window if it's been more than 60s since the first crash
+        if (( now - first > 60 )); then
+          crash_first[$svc]=$now
+          crash_count[$svc]=1
+        else
+          crash_count[$svc]=$((count + 1))
+        fi
+
+        if (( ${crash_count[$svc]} >= 3 )); then
+          echo -e "\n${RD}  ✗${NC} $svc crashed 3+ times in 60s — giving up. Check $LOGS/$svc.log"
+          echo -e "${DM}     Fix the issue and run: ./start.sh restart${NC}"
+          crash_disabled[$svc]=1
+          rm -f "$f"
+          continue
+        fi
+
+        echo -e "\n${YL}  ⚠${NC} $svc crashed (attempt ${crash_count[$svc]}/3) — restarting..."
         case "$svc" in
           app)   node "$DIR/app.js"   >> "$LOGS/app.log"   2>&1 & ;;
           music) node "$DIR/music.js" >> "$LOGS/music.log" 2>&1 & ;;
@@ -281,8 +337,17 @@ case "${1:-start}" in
   restart)  stop_all; sleep 1 ;;
   status)   show_status; exit 0 ;;
   setup)    exec node "$DIR/setup.js" ;;
-  viewer)   open_viewer; exit 0 ;;
+  viewer)
+    # Pass streamBuffer=0 so preview shows animations instantly (no stream delay)
+    load_env
+    chromium-browser --app="http://localhost:${API_PORT:-3000}?streamBuffer=0" &
+    exit 0 ;;
   update)
+    # Bump build counter before pushing
+    BUILD_FILE="$DIR/.build"
+    BUILD=$(( $(cat "$BUILD_FILE" 2>/dev/null || echo 0) + 1 ))
+    echo "$BUILD" > "$BUILD_FILE"
+    info "Build #$BUILD"
     if [[ "${2:-}" == "v" ]]; then github_update major; else github_update minor; fi
     exit 0 ;;
   rollback) github_rollback "${2:-}"; exit 0 ;;
@@ -307,8 +372,124 @@ case "${1:-start}" in
       [[ -n "$match" ]] && less +G "$match" || echo "No session matching: ${2}"
     fi
     exit 0 ;;
+  verifyenv)
+    SECRET_FILE=""
+    for c in "Secret(live).txt" "Secret(beta).txt" "Secret.txt"; do
+      [ -f "$DIR/$c" ] && { SECRET_FILE="$DIR/$c"; break; }
+    done
+    if [ -z "$SECRET_FILE" ]; then
+      # No Secret file — check the loaded environment instead
+      echo "No Secret file found. Checking loaded environment variables..."
+      echo ""
+      load_env 2>/dev/null || true
+      MISSING=0
+      for key in TWITCH_CHANNEL TWITCH_BOT_USERNAME TWITCH_CLIENT_ID TWITCH_STREAM_KEY HELIUS_API_KEY; do
+        val="${!key:-}"
+        if [ -n "$val" ]; then
+          # Mask secrets in display
+          disp="$val"
+          case "$key" in TWITCH_STREAM_KEY|HELIUS_API_KEY|TWITCH_OAUTH_TOKEN) disp="${val:0:6}…(set)";; esac
+          printf '  ✓ %-22s = %s\n' "$key" "$disp"
+        else
+          printf '  ✗ %-22s = <MISSING>\n' "$key"
+          MISSING=$((MISSING+1))
+        fi
+      done
+      echo ""
+      if [ "$MISSING" -gt 0 ]; then
+        echo "  $MISSING required value(s) missing from environment."
+        echo "  Run ./start.sh resetenv to create a Secret file, then ./start.sh verifyenv to fill it."
+        exit 1
+      else
+        ok "All required environment variables present"
+        exit 0
+      fi
+    fi
+    echo "Reviewing: $SECRET_FILE  (y=keep, n=edit)"
+    TMPFILE=$(mktemp)
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "${line// }" ]]; then
+        printf '%s\n' "$line" >> "$TMPFILE"; continue
+      fi
+      if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+        KEY="${BASH_REMATCH[1]}"; VAL="${BASH_REMATCH[2]}"
+        printf '  %-30s = %s\n' "$KEY" "${VAL:-<empty>}"
+        read -rp "  Correct? [y/n]: " ans < /dev/tty
+        if [[ "$ans" == "n" || "$ans" == "N" ]]; then
+          read -rp "  New value for $KEY: " newval < /dev/tty
+          printf '%s=%s\n' "$KEY" "$newval" >> "$TMPFILE"
+        else
+          printf '%s\n' "$line" >> "$TMPFILE"
+        fi
+      else
+        printf '%s\n' "$line" >> "$TMPFILE"
+      fi
+    done < "$SECRET_FILE"
+    for key in TWITCH_CHANNEL TWITCH_BOT_USERNAME TWITCH_CLIENT_ID TWITCH_STREAM_KEY HELIUS_API_KEY; do
+      if ! grep -qP "^${key}=.+" "$TMPFILE" 2>/dev/null; then
+        printf '\n  ⚠  %s is missing or empty\n' "$key"
+        read -rp "  Enter value for $key: " newval < /dev/tty
+        if grep -q "^${key}=" "$TMPFILE"; then
+          sed -i "s|^${key}=.*|${key}=${newval}|" "$TMPFILE"
+        else
+          printf '%s=%s\n' "$key" "$newval" >> "$TMPFILE"
+        fi
+      fi
+    done
+    cp "$TMPFILE" "$SECRET_FILE"; rm -f "$TMPFILE"
+    echo ""; ok "$SECRET_FILE updated — run ./start.sh to apply"
+    exit 0 ;;
+
+  resetenv)
+    DEST="$DIR/Secret(live).txt"
+    if [ -f "$DEST" ]; then
+      read -rp "Secret(live).txt exists — overwrite? [y/n]: " ans < /dev/tty
+      [[ "$ans" != "y" && "$ans" != "Y" ]] && { echo "Cancelled."; exit 0; }
+      cp "$DEST" "${DEST}.bak.$(date +%s)"
+      ok "Backed up existing file"
+    fi
+    cp "$DIR/Secret.template.txt" "$DEST"
+    ok "Created fresh Secret(live).txt — fill in values then run ./start.sh verifyenv"
+    exit 0 ;;
+
+  verifytoken)
+    # Validate the current OAuth token against Twitch and show its account + scopes
+    load_env
+    export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" --silent
+    node -e '
+      const https=require("https");
+      const raw=(process.env.TWITCH_OAUTH_TOKEN||"").replace(/^oauth:/,"");
+      if(!raw){console.log("✗ No TWITCH_OAUTH_TOKEN set");process.exit(1);}
+      https.request({hostname:"id.twitch.tv",path:"/oauth2/validate",headers:{Authorization:"OAuth "+raw}},r=>{
+        let d="";r.on("data",c=>d+=c);r.on("end",()=>{
+          if(r.statusCode!==200){console.log("✗ Token INVALID/EXPIRED (status "+r.statusCode+")");process.exit(1);}
+          const j=JSON.parse(d);
+          console.log("✓ Token VALID");
+          console.log("  Account:  "+j.login);
+          console.log("  Expires:  "+Math.round(j.expires_in/3600)+"h");
+          console.log("  Scopes:   "+(j.scopes||[]).join(", "));
+          const need=["chat:read","chat:edit"];
+          const missing=need.filter(s=>!(j.scopes||[]).includes(s));
+          if(missing.length)console.log("  ⚠ MISSING for chat: "+missing.join(", "));
+          else console.log("  ✓ Has chat:read + chat:edit (commands will work)");
+          console.log("");
+          console.log("  IMPORTANT: TWITCH_BOT_USERNAME should be \""+j.login+"\" (or leave it — token account is used automatically)");
+        });
+      }).on("error",e=>{console.log("✗ Network error: "+e.message);process.exit(1);}).end();
+    '
+    exit 0 ;;
+
+  updatescopes)
+    info "Stopping app to refresh Twitch OAuth..."
+    kill_pid app 2>/dev/null || true; pkill -TERM -f "node $DIR/app.js" 2>/dev/null || true; sleep 1
+    load_env
+    export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" --silent
+    node "$DIR/scripts/updatescopes.js"
+    echo ""; ok "Run ./start.sh to restart with the new token"
+    exit 0 ;;
+
   start|"") ;;
-  *) echo "Usage: ./start.sh [start|stop|restart|status|setup|viewer|chat|monitor|session|update|rollback|deploy|kill]"; exit 1 ;;
+  *) echo "Usage: ./start.sh [start|stop|restart|status|setup|viewer|chat|monitor|session|update|rollback|deploy|kill|verifyenv|resetenv|updatescopes]"; exit 1 ;;
 esac
 
 # ── Check setup has been run ───────────────────────────────────────────────────
@@ -320,8 +501,51 @@ if [[ -z "${TWITCH_CHANNEL:-}" ]]; then
   load_env
 fi
 
-# ── Kill any stale pids ────────────────────────────────────────────────────────
-for svc in app stream music; do kill_pid "$svc" 2>/dev/null || true; done
+# ── Ensure clean slate before starting ────────────────────────────────────────
+ensure_clean() {
+  # 1. Kill by PID files
+  for svc in app stream music pupcore teller; do kill_pid "$svc" 2>/dev/null || true; done
+
+  # 2. Kill by process name (catches anything that didn't write a PID file)
+  pkill -TERM -f "node $DIR/app.js"     2>/dev/null || true
+  pkill -TERM -f "node $DIR/pupcore.js" 2>/dev/null || true
+  pkill -TERM -f "node $DIR/teller.js"  2>/dev/null || true
+  pkill -TERM -f "node $DIR/music.js"   2>/dev/null || true
+  pkill -TERM -f "node $DIR/stream.js"  2>/dev/null || true
+  pkill -TERM -f "node $DIR/monitor.js" 2>/dev/null || true
+  pkill -TERM -x mpv 2>/dev/null || true   # kill any stray music player
+
+  # 3. Give processes 2s to exit gracefully
+  sleep 2
+
+  # 4. Force-kill anything still alive
+  pkill -KILL -f "node $DIR/app.js"     2>/dev/null || true
+  pkill -KILL -f "node $DIR/pupcore.js" 2>/dev/null || true
+  pkill -KILL -f "node $DIR/teller.js"  2>/dev/null || true
+  pkill -KILL -f "node $DIR/music.js"   2>/dev/null || true
+  pkill -KILL -f "node $DIR/stream.js"  2>/dev/null || true
+  pkill -KILL -x mpv 2>/dev/null || true   # force-kill stray mpv
+
+  # 5. Free all required ports — wait until confirmed clear
+  local ports="3000 3001 3002 3003"
+  fuser -k 3000/tcp 3001/tcp 3002/tcp 3003/tcp 2>/dev/null || true
+  local waited=0
+  for port in $ports; do
+    while fuser "$port/tcp" &>/dev/null && [ $waited -lt 10 ]; do
+      sleep 0.5; waited=$((waited+1))
+    done
+  done
+
+  # 6. Remove Xvfb locks so stream.js can start cleanly
+  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+
+  # 7. Clean up stale PID files
+  rm -f "$PIDS"/*.pid 2>/dev/null || true
+
+  # 8. Clean up music ctrl file
+  rm -f /tmp/choctotv_music_ctrl.json 2>/dev/null || true
+}
+ensure_clean
 
 # ── Session log setup ─────────────────────────────────────────────────────────
 SESSION_DIR="$LOGS/sessions"
@@ -363,15 +587,17 @@ hdr "  ChoctoTV — Starting"
 hdr "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── Launch services ────────────────────────────────────────────────────────────
-launch app    app.js    app.log    3
-launch music  music.js  music.log  1
-launch stream stream.js stream.log 2
+launch pupcore pupcore.js pupcore.log 2
+launch teller  teller.js  teller.log 1
+launch app     app.js     app.log    3
+launch music   music.js   music.log  1
+launch stream  stream.js  stream.log 2
 
 # ── Ready banner ───────────────────────────────────────────────────────────────
 echo ""
 hdr "${GR}━━━  ChoctoTV Live  ━━━${NC}"
 echo -e "  ${CY}Channel${NC}  #${TWITCH_CHANNEL:-?}"
-echo -e "  ${CY}Overlay${NC}  http://localhost:${OVERLAY_PORT:-8080}"
+echo -e "  ${CY}Overlay${NC}  http://localhost:${API_PORT:-3000}"
 echo -e "  ${CY}API${NC}      http://localhost:${API_PORT:-3000}"
 echo ""
 echo -e "  ${DM}./start.sh stop      stop everything${NC}"
@@ -411,6 +637,8 @@ cleanup() {
   pkill -9 -f "node $DIR/app.js"    2>/dev/null || true
   pkill -9 -f "node $DIR/stream.js" 2>/dev/null || true
   pkill -9 -f "node $DIR/music.js"  2>/dev/null || true
+  pkill -9 -f "node $DIR/pupcore.js" 2>/dev/null || true
+  pkill -9 -f "node $DIR/teller.js"  2>/dev/null || true
   pkill -9 -f "ffmpeg"              2>/dev/null || true
   pkill -9 -f "Xvfb :${DISPLAY_NUM:-99}" 2>/dev/null || true
   pkill -9 -f "chromium"            2>/dev/null || true

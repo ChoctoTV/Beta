@@ -141,7 +141,7 @@ const SERVICES = [
 // ── App health via API ────────────────────────────────────────────────────────
 let appHealth = null;
 function fetchHealth() {
-  const req = http.request({ hostname:'127.0.0.1', port:parseInt(process.env.API_PORT||'3000'), path:'/health', method:'GET', timeout:1000 }, res => {
+  const req = http.request({ hostname:'127.0.0.1', port:parseInt(process.env.API_PORT||'3000'), path:'/status', method:'GET', timeout:1000 }, res => {
     let d = ''; res.on('data', c => d += c);
     res.on('end', () => { try { appHealth = JSON.parse(d); } catch {} });
   });
@@ -229,8 +229,8 @@ function render() {
     const h=Math.floor(appHealth.uptime/3600), m=Math.floor((appHealth.uptime%3600)/60), s=appHealth.uptime%60;
     const uptimeStr = h+'h '+String(m).padStart(2,'0')+'m '+String(s).padStart(2,'0')+'s';
     lines.push('  Uptime:         ' + uptimeStr);
-    lines.push(`  WS clients:     ${appHealth.ws}`);
-    lines.push(`  Active players: ${appHealth.active}`);
+    lines.push(`  WS clients:     ${appHealth.wsClientsClients}`);
+    lines.push(`  Active players: ${Object.entries(appHealth.counters||{}).filter(([k])=>k.includes("commands_total")).reduce((t,[,v])=>t+v,0)}`);
     lines.push('  Status:         \x1b[32mconnected\x1b[0m');
   } else {
     lines.push(`  ${C.yl}App not reachable on port ${parseInt(process.env.API_PORT||'3000')}${C.nc}`);

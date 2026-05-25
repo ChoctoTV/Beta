@@ -1,0 +1,13 @@
+'use strict';
+const Database = require('better-sqlite3');
+const path     = require('path');
+const fs       = require('fs');
+const DB_DIR   = path.join(__dirname, '../vault/data');
+fs.mkdirSync(DB_DIR, { recursive: true });
+const db = new Database(path.join(DB_DIR, 'choctotv.db'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+db.pragma('synchronous = NORMAL');
+const { runMigrations } = require('./migrations');
+runMigrations(db);
+module.exports = db;

@@ -1,0 +1,204 @@
+/**
+ * ChestGame — Peanut Butter Jar, always on screen.
+ * Tag hangs below the jar. Lick count persists through reboots.
+ * Queue ensures pups animate one at a time.
+ */
+const ChestGame = {
+  mount:null, _wrap:null, _jar:null, _lid:null,
+  _queue:[], _processing:false, _paused:false,
+
+  async init({ mount, EventBus }) {
+    this.mount = mount;
+    this._buildCSS();
+    this._buildDOM();
+    EventBus.on('event:chest_new',  m => this._onNew(m));
+    EventBus.on('event:chest_lick', m => this._onLick(m));
+  },
+
+  _onNew(m) {
+    // Reset lid — jar stays visible always, no fade in/out
+    if (this._lid) { this._lid.classList.remove('popped'); void this._lid.offsetWidth; }
+  },
+
+  _onLick(m) {
+    this._queue.push(m);
+    this._processNext();
+  },
+
+  _processNext() {
+    if (this._paused || this._processing || !this._queue.length) return;
+    this._processing = true;
+    const m = this._queue.shift();
+    const isLast = (m.lock <= 0);
+    this._spawnRunner(m.sprite, m.rarity, isLast, () => {
+      this._processing = false;
+      if (isLast) {
+        this._paused = true;
+        setTimeout(() => { this._paused = false; this._processNext(); }, 3600);
+      } else {
+        this._processNext();
+      }
+    });
+  },
+
+  _spawnRunner(spriteName, rarity, isLast, onDone) {
+    const SCALE = { common:.75, uncommon:.85, rare:1, epic:1.1, legendary:1.25 };
+    const size  = Math.round(64 * (SCALE[rarity] || 1));
+
+    const img = document.createElement('img');
+    img.className = 'cg-runner';
+    img.style.width  = size + 'px';
+    img.style.height = 'auto';
+    img.src = `./assets/pups/${rarity||'common'}/${spriteName}.png`;
+    img.onerror = () => { img.style.display = 'none'; };
+
+    const jarX     = window.innerWidth / 2 + 168 + 50;
+    const fromLeft = Math.random() > 0.3;
+    const startX   = fromLeft ? -size - 10 : window.innerWidth + 10;
+    const arriveX  = fromLeft ? jarX - size - 8 : jarX + 8;
+
+    img.style.left            = startX + 'px';
+    img.style.transform       = fromLeft ? 'scaleX(1)' : 'scaleX(-1)';
+    img.style.transitionDuration = '0s';
+    document.body.appendChild(img);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        img.style.transitionDuration = '1s';
+        img.style.left = arriveX + 'px';
+
+        img.addEventListener('transitionend', () => {
+          img.classList.add('licking');
+
+          setTimeout(() => {
+            img.classList.remove('licking');
+
+            if (this._jar) {
+              this._jar.classList.remove('wiggle'); void this._jar.offsetWidth;
+              this._jar.classList.add('wiggle');
+              this._jar.addEventListener('animationend',
+                () => this._jar.classList.remove('wiggle'), { once:true });
+            }
+
+            if (isLast) {
+              setTimeout(() => {
+                this._openJar();
+                img.style.transitionDuration = '.6s';
+                img.style.left = startX + 'px';
+                img.style.transform = fromLeft ? 'scaleX(-1)' : 'scaleX(1)';
+                img.addEventListener('transitionend',
+                  () => { img.remove(); onDone?.(); }, { once:true });
+              }, 400);
+            } else {
+              img.style.transitionDuration = '.8s';
+              img.style.left = startX + 'px';
+              img.style.transform = fromLeft ? 'scaleX(-1)' : 'scaleX(1)';
+              img.addEventListener('transitionend',
+                () => { img.remove(); onDone?.(); }, { once:true });
+            }
+          }, 350);
+        }, { once:true });
+      });
+    });
+  },
+
+  _openJar() {
+    if (this._lid) this._lid.classList.add('popped');
+    const emojis = ['🥜','🥜','🍫','🥜','🥜','🍫','🥜','🍫'];
+    emojis.forEach((e, i) => {
+      setTimeout(() => {
+        const p = document.createElement('div'); p.className = 'cg-peanut';
+        p.textContent = e;
+        p.style.cssText = `left:${10+Math.random()*80}px;top:${10+Math.random()*25}px;
+          animation-delay:${Math.random()*.25}s`;
+        this._jar?.appendChild(p);
+        p.addEventListener('animationend', () => p.remove());
+      }, i * 55);
+    });
+    // After animation, reset lid (jar stays visible for next round)
+    setTimeout(() => {
+      if (this._lid) { this._lid.classList.remove('popped'); }
+    }, 3500);
+  },
+
+  _buildCSS() {
+    if (document.getElementById('cg-css')) return;
+    const s = document.createElement('style'); s.id = 'cg-css';
+    s.textContent = `
+      /* Jar: always visible, lifted up to make room for tag below */
+      #cg-wrap{
+        position:fixed;bottom:248px;left:calc(50% + 168px);
+        display:flex;flex-direction:column;align-items:center;gap:0;
+        pointer-events:none;z-index:22;
+      }
+      /* "Lick Me!" tag BELOW the jar */
+      #cg-tag{
+        background:#FFF8DC;border:2px solid #C8882A;border-radius:8px;
+        padding:3px 10px;font-family:Consolas,monospace;font-size:15px;
+        font-weight:800;color:#8B4513;letter-spacing:.06em;
+        box-shadow:0 2px 6px rgba(0,0,0,.4);margin-top:5px;position:relative;
+      }
+      /* Arrow pointing UP toward jar */
+      #cg-tag::before{content:'';position:absolute;top:-8px;left:50%;
+        transform:translateX(-50%);border:4px solid transparent;
+        border-bottom-color:#C8882A;}
+
+      @keyframes cgWiggle{0%,100%{transform:rotate(0)translateX(0)}
+        20%{transform:rotate(-7deg)translateX(-4px)}40%{transform:rotate(7deg)translateX(4px)}
+        60%{transform:rotate(-4deg)translateX(-2px)}80%{transform:rotate(4deg)translateX(2px)}}
+      #cg-jar.wiggle{animation:cgWiggle .35s ease;}
+
+      @keyframes cgLidPop{0%{transform:translateY(0)rotate(0);opacity:1}
+        100%{transform:translateY(-120px)rotate(-40deg);opacity:0}}
+      #cg-lid-el.popped{animation:cgLidPop .7s cubic-bezier(.2,0,.2,1) forwards;}
+
+      @keyframes cgPeanut{0%{opacity:1;transform:translateY(0)rotate(0)scale(1)}
+        100%{opacity:0;transform:translateY(-70px)rotate(360deg)scale(1.4)}}
+      .cg-peanut{position:absolute;font-size:20px;
+        animation:cgPeanut 1s ease forwards;pointer-events:none;}
+
+      .cg-runner{position:fixed;bottom:252px;image-rendering:pixelated;
+        object-fit:contain;z-index:21;pointer-events:none;
+        transition:left 1s ease-in-out;}
+      @keyframes cgLickBob{0%,100%{transform:translateY(0)}
+        30%{transform:translateY(-12px)rotate(-8deg)}
+        60%{transform:translateY(-6px)rotate(4deg)}}
+      .cg-runner.licking{animation:cgLickBob .35s ease;}
+    `;
+    document.head.appendChild(s);
+  },
+
+  _buildDOM() {
+    this.mount.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.id = 'cg-wrap';
+    wrap.innerHTML = `
+      <div id="cg-jar" style="width:100px;height:120px;position:relative;">
+        <svg viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg" width="100" height="120">
+          <rect x="10" y="30" width="80" height="78" rx="6" fill="#F5E6C8" stroke="#C8A060" stroke-width="2"/>
+          <rect x="13" y="50" width="74" height="55" rx="4" fill="#C8882A"/>
+          <path d="M13 50 Q25 44 37 50 Q49 56 62 50 Q74 44 87 50 L87 55 Q74 49 62 55 Q49 61 37 55 Q25 49 13 55 Z" fill="#D4980E"/>
+          <rect x="15" y="32" width="12" height="70" rx="4" fill="rgba(255,255,255,.22)"/>
+          <rect x="10" y="65" width="80" height="28" fill="#D4890A" opacity=".9"/>
+          <text x="50" y="77" text-anchor="middle" font-size="9" font-family="'Segoe UI',sans-serif" font-weight="800" fill="white" letter-spacing="1">CHOCTO</text>
+          <text x="50" y="88" text-anchor="middle" font-size="8" font-family="'Segoe UI',sans-serif" font-weight="700" fill="rgba(255,255,200,.9)">PEANUT BUTTER</text>
+          <ellipse cx="50" cy="108" rx="40" ry="5" fill="#C8A060" opacity=".6"/>
+          <g id="cg-lid-el">
+            <rect x="8" y="18" width="84" height="16" rx="4" fill="#8B5E1A" stroke="#5C3800" stroke-width="1.5"/>
+            <rect x="10" y="19" width="80" height="5" rx="3" fill="rgba(255,255,255,.2)"/>
+            <rect x="8" y="27" width="84" height="3" fill="rgba(0,0,0,.12)"/>
+            <line x1="22" y1="20" x2="22" y2="33" stroke="rgba(0,0,0,.18)" stroke-width="2"/>
+            <line x1="36" y1="20" x2="36" y2="33" stroke="rgba(0,0,0,.18)" stroke-width="2"/>
+            <line x1="50" y1="20" x2="50" y2="33" stroke="rgba(0,0,0,.18)" stroke-width="2"/>
+            <line x1="64" y1="20" x2="64" y2="33" stroke="rgba(0,0,0,.18)" stroke-width="2"/>
+            <line x1="78" y1="20" x2="78" y2="33" stroke="rgba(0,0,0,.18)" stroke-width="2"/>
+          </g>
+        </svg>
+      </div>
+      <div id="cg-tag">👅 Lick Me!</div>`;
+    this.mount.appendChild(wrap);
+    this._wrap = wrap;
+    this._jar  = wrap.querySelector('#cg-jar');
+    this._lid  = wrap.querySelector('#cg-lid-el');
+  },
+};
+export default ChestGame;

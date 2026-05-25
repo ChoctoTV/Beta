@@ -34,7 +34,7 @@ const VIEWER_COMMANDS = [
   { label:'⚔️ !battle',   desc:'enter Puppy Wars'          },
   { label:'💰 !balance',  desc:'check Choctobits'          },
   { label:'🎒 !inv',      desc:'check items'               },
-  { label:'💵 !cashout',  desc:'redeem Choctobits'         },
+  { label:'💵 !cashout',  desc:'redeem for <img src="/assets/choctopi.png" class="choctopi-icon" style="height:1em;vertical-align:middle;" alt="Chocto">Chocto' },
   { label:'🪵 !vendsticks 100', desc:'sell sticks'         },
   { label:'🎾 !vendballs 100',  desc:'sell balls'          },
   { label:'🌙 !vendmoons 100',  desc:'sell moons'          },
@@ -44,7 +44,7 @@ const VIEWER_COMMANDS = [
   { label:'🎫 !lottoupdate 1342', desc:'set ticket digits 1-4' },
   { label:'😴 !lurk',           desc:'8h auto-play at 33% reward' },
   { label:'🎮 !GBM Good/Ball/Moon', desc:'every 10min RPS for 🍫' },
-  { label:'👅 !lick',           desc:'chip at the chest lock for 🍫' },
+  { label:'👅 !lick',           desc:'lick the peanut butter jar for 🍫' },
 ];
 
 // ── Item renderers ─────────────────────────────────────────────────────────────
@@ -52,8 +52,11 @@ function coinItem(c, p) {
   const ch    = parseFloat(p?.ch);
   const chOk  = !isNaN(ch);
   const chCol = chOk ? (ch >= 0 ? '#2ecc71' : '#e74c3c') : '#888';
+  // Rename CHOCT sym to $Choctopus in the display
+  const isChocto = c.sym && c.sym.toUpperCase().includes('CHOCT');
+  const displaySym = isChocto ? '$Choctopus' : c.sym;
   return `<div class="t-item">
-    <span class="t-sym" style="color:${c.color};text-shadow:0 0 8px ${c.color}55;">${c.sym}</span>
+    <span class="t-sym" style="color:${c.color};text-shadow:0 0 8px ${c.color}55;">${displaySym}</span>
     <span class="t-price">${fmt(p?.price)}</span>
     ${chOk ? `<span class="t-pct" style="color:${chCol};">${pctStr(ch)}</span>` : ''}
   </div>`;
@@ -64,6 +67,12 @@ function cmdItem(cmd) {
     <span class="t-cmd-label">${cmd.label}</span>
     <span class="t-cmd-desc">${cmd.desc}</span>
   </div>`;
+}
+
+function annItem(a) {
+  if (!a) return '';
+  const cls = a.urgent ? 't-ann t-ann-urgent' : 't-ann';
+  return `<div class="${cls}">${a.text}</div>`;
 }
 
 // Divider between groups
@@ -92,17 +101,33 @@ function lottoItem(data) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Lurker list item (defined outside Ticker object like all other helpers)
+function lurkerItem(lurkers) {
+  if (!lurkers || lurkers.length === 0) return '';
+  const names = lurkers.map(l => `<span class="t-lurker">😴${l.display}</span>`).join(' ');
+  return `<div class="t-item" style="border-left:2px solid #6644aa;">
+    <span class="t-sym" style="color:#8855cc;">LURKING</span>
+    <span class="t-price" style="color:#aa88ff;font-size:14px;">${names}</span>
+  </div>`;
+}
+
 const PriceTicker = {
   mount:null, bar:null, inner:null, rafId:null, timer:null, visible:true,
   coins:[],
   prices:{},
   scrollPos:0,
+  announcements: [],    // fetched from /announcements
+  annIndex:      0,
+  lurkers:       [],
+  rotationCount: 0,
+  _contentHash:  '',    // fingerprint — skip rebuild if content unchanged
   contentW:0,
   lastTs:null,
 
   async init({mount, EventBus}) {
     this.mount = mount;
     this.mount.style.cssText = 'position:absolute;top:0;left:0;right:0;pointer-events:none;z-index:30;';
+    await this._loadTickerFile();
 
     if (!document.getElementById('ticker-css')) {
       const s = document.createElement('style'); s.id='ticker-css';
@@ -176,31 +201,85 @@ const PriceTicker = {
 
     await this.fetchAll();
     this.timer = setInterval(() => this.fetchAll(), REFRESH_MS);
+    setInterval(() => this._loadTickerFile(), 5 * 60 * 1000);  // reload ticker.txt every 5 min
     this._startScroll();
   },
 
   // ── Price fetching ───────────────────────────────────────────────────────────
+  async _loadTickerFile() {
+    try {
+      const r = await fetch('/ticker');
+      if (r.ok) {
+        const items = await r.json();
+        if (Array.isArray(items) && items.length) {
+          VIEWER_COMMANDS.length = 0;
+          items.forEach(i => VIEWER_COMMANDS.push(i));
+          console.log(`[Ticker] Loaded ${items.length} entries from ticker.txt`);
+        }
+      }
+    } catch (e) { console.warn('[Ticker] Could not load ticker.txt:', e.message); }
+  },
+
   async fetchAll() {
     const cg  = this.coins.filter(c => sourceOf(c.id) === 'cg');
     const dex = this.coins.filter(c => sourceOf(c.id) === 'dex');
+    const today = new Date().toISOString().slice(0, 10);
+    const needsLotto = !localStorage.getItem(`choctotv_lotto_${today}`);
     await Promise.allSettled([
       cg.length ? this._fetchCG(cg) : Promise.resolve(),
       ...dex.map(c => this._fetchDex(c)),
-      this._fetchLotto(),
+      needsLotto ? this._fetchLotto() : Promise.resolve(),
+      this._fetchAnnouncements(),
     ]);
     this._buildContent();
   },
 
+  async _fetchAnnouncements() {
+    try {
+      const r = await fetch('/announcements');
+      if (r.ok) this.announcements = await r.json();
+    } catch(e) { console.warn('[Ticker] announcements:', e.message); }
+    // Lurk updates arrive via WS
+    EventBus.on('event:lurk_update', ev => {
+      this.lurkers = ev.lurkers || [];
+      // Debounce: lurk fires every 3-5s per user — don't rebuild on every single one
+      if (this._lurkRebuildTimer) clearTimeout(this._lurkRebuildTimer);
+      this._lurkRebuildTimer = setTimeout(() => this._buildContent(), 2000);
+    });
+    try {
+    } catch {}
+  },
+
   async _fetchLotto() {
     try {
+      const today   = new Date().toISOString().slice(0, 10);
+      const cacheKey= `choctotv_lotto_${today}`;
+      // Use localStorage cache — lottery only changes at midnight
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        this.lottoData = JSON.parse(cached);
+        return;
+      }
       const r = await fetch('/lottery/today');
-      if (r.ok) this.lottoData = await r.json();
+      if (r.ok) {
+        const data = await r.json();
+        this.lottoData = data;
+        // Cache for the day — clear yesterday's entries
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('choctotv_lotto_') && k !== cacheKey) localStorage.removeItem(k);
+        }
+        localStorage.setItem(cacheKey, JSON.stringify(data));
+      }
     } catch(e) {}
   },
 
   async _fetchCG(list) {
     try {
-      const ids = list.map(c=>c.id).join(',');
+      // Always include SOL (Solana) — it's the pairing coin for Choctopus
+      const solanaId = 'solana';
+      const allIds   = [...new Set([...list.map(c=>c.id), solanaId])];
+      const ids = allIds.join(',');
       const r   = await fetch(`${COINGECKO}?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
       if (!r.ok) return;
       const j = await r.json();
@@ -210,6 +289,9 @@ const PriceTicker = {
         this.prices[c.sym].price = d.usd;
         this.prices[c.sym].ch    = d.usd_24h_change;
       });
+      // Store SOL separately
+      const solD = j['solana'];
+      if (solD) this.prices['__SOL__'] = { price:solD.usd, ch:solD.usd_24h_change };
     } catch(e) { console.warn('[Ticker] CoinGecko:', e.message); }
   },
 
@@ -227,31 +309,84 @@ const PriceTicker = {
     } catch(e) { console.warn(`[Ticker] DexScreener ${coin.sym}:`, e.message); }
   },
 
+
   // ── Content: coins | divider | commands | divider | repeat ─────────────────
   _buildContent() {
-    const coinItems  = this.coins.map(c => coinItem(c, this.prices[c.sym])).join('');
+    // Compute a quick fingerprint — skip the innerHTML rebuild if nothing changed.
+    // This prevents scroll position resets during stable periods.
+    const urgents = (this.announcements||[]).filter(a=>a.urgent);
+    const normals = (this.announcements||[]).filter(a=>!a.urgent);
+    const ann = normals[this.annIndex % Math.max(1, normals.length)];
+    const fp = [
+      this.coins.map(c=>`${c.sym}:${(this.prices[c.sym]||{}).usd||''}`).join(','),
+      this.lurkers.map(l=>l.userId).join(','),
+      urgents.map(a=>a.text).join('|'),
+      ann?.text||'',
+      this.lottoData?.prize||'',
+    ].join(';');
+    if (fp === this._contentHash) return;  // nothing changed — keep scrolling uninterrupted
+    this._contentHash = fp;
+
+    // Build coin items — inject SOL right after Choctopus (its pairing coin)
+    const solItem = this.prices['__SOL__']
+      ? coinItem({ sym:'SOL', color:'#9945FF' }, this.prices['__SOL__'])
+      : '';
+    const coinItems = this.coins.map(c => {
+      const item = coinItem(c, this.prices[c.sym]);
+      // Insert SOL immediately after the Choctopus coin
+      const isChoct = c.sym && c.sym.toUpperCase().includes('CHOCT');
+      return isChoct ? item + solItem : item;
+    }).join('') + (this.coins.every(c => !c.sym?.toUpperCase().includes('CHOCT')) ? solItem : '');
     const cmdItems   = VIEWER_COMMANDS.map(cmdItem).join('');
     const lottoBlock = lottoItem(this.lottoData);
 
-    const segment = coinItems + DIVIDER + lottoBlock + DIVIDER + cmdItems + DIVIDER;
-    this.inner.innerHTML = segment + segment; // duplicate for seamless loop
+    let annBlock = '';
+    urgents.forEach(a => { annBlock += annItem(a); });
+    if (normals.length && this.rotationCount % 3 === 0) {
+      annBlock += annItem(ann);
+    }
 
-    requestAnimationFrame(() => {
-      this.contentW = this.inner.scrollWidth / 2;
-    });
+    const lurkBlock = lurkerItem(this.lurkers);
+    const segment = coinItems + DIVIDER + lottoBlock + DIVIDER
+      + (lurkBlock ? lurkBlock + DIVIDER : '')
+      + (annBlock ? annBlock + DIVIDER : '')
+      + cmdItems + DIVIDER;
+    this.inner.innerHTML = segment + segment; // duplicate for seamless loop
+    // Measure width synchronously now — innerHTML assignment already forced layout.
+    // Doing it inside another rAF caused a second layout per build → frame stutter.
+    this.contentW = this.inner.scrollWidth / 2;
   },
 
   // ── Scroll loop ──────────────────────────────────────────────────────────────
   _startScroll() {
+    // No fps throttle here — transform writes are GPU-composited (essentially free).
+    // dt-capping prevents jumps if the tab is backgrounded.
     const tick = ts => {
       this.rafId = requestAnimationFrame(tick);
-      if (this.lastTs !== null && this.visible && this.contentW > 0) {
-        const dt = Math.min((ts - this.lastTs) / 1000, 0.1);
+      const elapsed = (this.lastTs != null) ? ts - this.lastTs : 16;
+      this.lastTs = ts;
+      if (this.visible && this.contentW > 0) {
+        const dt = Math.min(elapsed / 1000, 0.1);  // never jump more than 100ms worth
         this.scrollPos += SCROLL_PPS * dt;
-        if (this.scrollPos >= this.contentW) this.scrollPos -= this.contentW;
+        if (this.scrollPos >= this.contentW) {
+          this.scrollPos -= this.contentW;
+          this.rotationCount++;
+          // Only rebuild when an announcement slot actually changes (every 3rd rotation
+          // if there are normals). Defer the rebuild out of the rAF loop via setTimeout
+          // so it doesn't block the next frame and cause stutter.
+          const normals = (this.announcements||[]).filter(a=>!a.urgent);
+          const needsRebuild = normals.length && this.rotationCount % 3 === 0;
+          if (needsRebuild && !this._rebuildPending) {
+            this._rebuildPending = true;
+            setTimeout(() => {
+              this._rebuildPending = false;
+              this.annIndex = (this.annIndex + 1) % normals.length;
+              this._buildContent();
+            }, 0);
+          }
+        }
         this.inner.style.transform = `translateX(${-this.scrollPos.toFixed(2)}px)`;
       }
-      this.lastTs = ts;
     };
     this.rafId = requestAnimationFrame(tick);
   },

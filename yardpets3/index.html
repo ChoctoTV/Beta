@@ -23,22 +23,72 @@
       transform-origin:top left;
       transform:scale(var(--scene-scale,1));
     }
-    #yard-mount     { position:absolute; inset:0; z-index:10; }
-    #battle-mount   { position:absolute; inset:0; z-index:20; pointer-events:none; }
-    #ticker-mount   { position:absolute; top:0; left:0; right:0; z-index:30; pointer-events:none; }
-    #settings-mount { position:absolute; inset:0; z-index:100; pointer-events:none; }
+    #billboard-mount{ position:absolute;inset:0;z-index:5;pointer-events:none; }
+    #yard-mount     { position:absolute; inset:0; z-index:10; contain:layout style; }
+    #classifieds-mount { position:absolute; bottom:0; left:0; right:0; height:220px; z-index:15; pointer-events:none; contain:layout style; will-change:transform; }
+    #calendar-mount    { position:absolute; bottom:0; right:0; width:384px; height:220px; z-index:16; pointer-events:none; contain:layout style; }
+    #chest-mount       { position:absolute; bottom:0; left:0; right:0; height:400px; z-index:22; pointer-events:none; }
+    #battle-mount      { position:absolute; bottom:0; left:0; right:0; height:220px; z-index:20; pointer-events:none; display:none; contain:layout style; }
+    #ticker-mount   { position:absolute; top:0; left:0; right:0; z-index:30; pointer-events:none; contain:layout style; will-change:transform; }
+    #settings-mount    { position:absolute; inset:0; z-index:100; pointer-events:none; }
+    #spotlight-mount  { position:absolute; inset:0; z-index:150; pointer-events:none; display:none; }
     #stream-mount   { position:absolute; top:52px; right:16px; z-index:90; pointer-events:none; }
-    #queue-mount    { position:absolute; top:50%; left:16px; transform:translateY(-50%); z-index:90; pointer-events:none; }
+    #queue-mount    { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:90; pointer-events:none; }
+    #morale-mount   { position:absolute; bottom:228px; left:50%; transform:translateX(-50%); z-index:25; pointer-events:none; white-space:nowrap; }
+  
+    /* Choctopi inline icon — used wherever Choctopus amounts appear in overlay */
+    /* Announcements ticker items */
+    .t-ann {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 20px;
+      color: #FFD700;
+      font-weight: 600;
+      font-size: 15px;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
+    .t-ann-urgent {
+      color: #FF4444;
+      font-weight: 800;
+      font-size: 16px;
+      animation: urgentPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes urgentPulse {
+      0%,100% { color: #FF4444; }
+      50%      { color: #FF8800; }
+    }
+    .choctopi-icon {
+      display: inline-block;
+      height: 1.1em;
+      width: auto;
+      vertical-align: middle;
+      margin: 0 0.05em;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,.4));
+    }
+    .choctopi-amount {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
   <div id="overlay-root">
+    <div id="billboard-mount"></div>
     <div id="yard-mount"></div>
+    <div id="classifieds-mount"></div>
+    <div id="calendar-mount"></div>
+    <div id="chest-mount"></div>
     <div id="battle-mount"></div>
     <div id="ticker-mount"></div>
+    <div id="spotlight-mount"></div>
     <div id="settings-mount"></div>
     <div id="stream-mount"></div>
     <div id="queue-mount"></div>
+    <div id="morale-mount"></div>
     <div id="boot-status">⏳ Loading...</div>
   </div>
   <script>

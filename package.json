@@ -1,20 +1,27 @@
 {
   "name": "choctotv",
-  "version": "4.0.0",
-  "description": "ChoctoTV YardPets stream overlay",
+  "version": "3.0.0",
+  "description": "ChoctoTV — 24/7 Twitch overlay game engine",
   "main": "app.js",
-  "engines": { "node": ">=18.0.0" },
+  "engines": { "node": ">=20.0.0" },
   "scripts": {
-    "start":  "node app.js",
-    "setup":  "node setup.js",
-    "stream": "node stream.js",
-    "music":  "node music.js"
+    "start":   "node app.js",
+    "test":    "jest --runInBand",
+    "migrate": "node scripts/migrate.js"
   },
   "dependencies": {
-    "cors":    "^2.8.5",
-    "dotenv":  "^16.4.5",
-    "express": "^4.19.2",
-    "tmi.js":  "^1.8.5",
-    "ws":      "^8.17.0"
+    "tmi.js":         "^1.8.5",
+    "better-sqlite3": "^9.4.3",
+    "pino":           "^9.2.0",
+    "pino-pretty":    "^11.2.1",
+    "dotenv":         "^16.4.5",
+    "ws":             "^8.17.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
   }
 }
