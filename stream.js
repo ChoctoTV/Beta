@@ -2,6 +2,58 @@
 // stream.js — Xvfb → Chromium → FFmpeg → Twitch RTMP pipeline
 require('dotenv').config();
 
+// Decrypt any enc: values left in .env from the old encrypted setup
+(function decryptLegacy() {
+  const fs = require('fs'), path = require('path'), os = require('os');
+  const kf = path.join(os.homedir(), '.choctotv.key');
+  if (!fs.existsSync(kf)) return;
+  try {
+    const key = Buffer.from(fs.readFileSync(kf, 'utf8').trim(), 'hex');
+    let n = 0;
+    for (const [k, v] of Object.entries(process.env)) {
+      if (!v?.startsWith('enc:')) continue;
+      try {
+        const buf = Buffer.from(v.slice(4), 'base64');
+        const d   = require('crypto').createDecipheriv('aes-256-gcm', key, buf.slice(0,12));
+        d.setAuthTag(buf.slice(12,28));
+        process.env[k] = Buffer.concat([d.update(buf.slice(28)), d.final()]).toString('utf8');
+        n++;
+      } catch {}
+    }
+    if (n) console.log(`[Stream] ${n} enc: values decrypted`);
+  } catch {}
+})();
+
+// Load plain values from Secret file if present — overrides .env
+(function loadSecrets() {
+  const fs   = require('fs'), path = require('path');
+  const sf = (function findSecretFile(dir) {
+  const fs   = require('fs'), path = require('path');
+  // Scan directory for any variant of the secret filename (case-insensitive)
+  // Priority: live > beta > plain. Handles SECRET(live).txt, Secret(beta).txt, SECRET.txt etc.
+  try {
+    const files = fs.readdirSync(dir);
+    const lower = f => f.toLowerCase();
+    const live  = files.find(f => lower(f) === 'secret(live).txt');
+    const beta  = files.find(f => lower(f) === 'secret(beta).txt');
+    const plain = files.find(f => lower(f) === 'secret.txt');
+    return live ? path.join(dir, live)
+         : beta ? path.join(dir, beta)
+         : plain ? path.join(dir, plain)
+         : null;
+  } catch { return null; }
+})(__dirname);
+  if (!sf) return;
+  for (const rawLine of fs.readFileSync(sf, 'utf8').split('\n')) {
+    const line = rawLine.split('#')[0].trim();
+    const eq   = line.indexOf('=');
+    if (eq < 1) continue;
+    const k = line.slice(0, eq).trim();
+    const v = line.slice(eq + 1).trim();
+    if (k && v) process.env[k] = v;
+  }
+})();
+
 const { spawn, spawnSync, execSync } = require('child_process');
 const path = require('path');
 const fs   = require('fs');
@@ -10,165 +62,77 @@ const os   = require('os');
 
 // ── Crypto: reads ~/.choctotv.key (written by setup.js) ─────────────────────
 // After running setup.js once, SECRET.txt is no longer needed by the app.
-(function decryptEnv() {
-  const PREFIX  = 'enc:';
-  const SALT    = 'ChoctoTV-v2';
-  const keyFile = path.join(os.homedir(), '.choctotv.key');
-
-  if (fs.existsSync(keyFile)) {
-    try {
-      const key = Buffer.from(fs.readFileSync(keyFile, 'utf8').trim(), 'hex');
-      for (const [k, v] of Object.entries(process.env)) {
-        if (!v || !v.startsWith(PREFIX)) continue;
-        try {
-          const buf = Buffer.from(v.slice(PREFIX.length), 'base64');
-          const d   = crypto.createDecipheriv('aes-256-gcm', key, buf.slice(0,12));
-          d.setAuthTag(buf.slice(12,28));
-          process.env[k] = Buffer.concat([d.update(buf.slice(28)), d.final()]).toString('utf8');
-        } catch {}
-      }
-      return;
-    } catch(e) { console.warn('[crypto] ~/.choctotv.key error:', e.message); }
-  }
-
-  // Fallback: derive from SECRET.txt (first run / missing keyfile)
-  const secretFile = path.join(__dirname, 'SECRET.txt');
-  if (!fs.existsSync(secretFile)) {
-    console.warn('[crypto] No ~/.choctotv.key — run: node setup.js');
-    return;
-  }
-  const S = {};
-  for (const line of fs.readFileSync(secretFile, 'utf8').split('\n')) {
-    const clean = line.split('#')[0].trim();
-    const eq = clean.indexOf('=');
-    if (eq < 0) continue;
-    const k = clean.slice(0, eq).trim().toUpperCase();
-    const v = clean.slice(eq + 1).trim();
-    if (k && v && !k.startsWith('\u2550')) S[k] = v;
-  }
-  const sk = S['STREAM_KEY'] || '', ci = S['CLIENT_ID'] || '';
-  if (!sk || !ci) { console.warn('[crypto] SECRET.txt missing keys — run: node setup.js'); return; }
-
-  function deriveKey(sk_, ci_) {
-    const skb = Buffer.from(sk_,'utf8'), cib = Buffer.from(ci_,'utf8');
-    const ml = Math.max(skb.length,cib.length)*2+16;
-    const mx = Buffer.alloc(ml,0);
-    let si=0,ci_i=0,mi=0;
-    while(si<skb.length||ci_i<cib.length){
-      if(si<skb.length){mx[mi%ml]^=skb[si];const s=ci_i<cib.length?(cib[ci_i%cib.length]%3)+1:1;mi+=s;si++;}
-      if(ci_i<cib.length){mx[mi%ml]^=cib[ci_i];const s=si<skb.length?(skb[si%skb.length]%3)+1:1;mi+=s;ci_i++;}
-    }
-    const rev=Buffer.from(ci_.split('').reverse().join(''));
-    for(let i=0;i<ml;i++){mx[i]^=rev[i%rev.length];mx[i]^=skb[(i*7+3)%skb.length];}
-    const h=Math.floor(ml/2),sd=Buffer.alloc(h);
-    for(let i=0;i<h;i++)sd[i]=mx[i]^mx[i+h]^(i&0xff);
-    return crypto.pbkdf2Sync(sd,SALT,100000,32,'sha256');
-  }
-  const key = deriveKey(sk, ci);
-  for(const[k,v]of Object.entries(process.env)){
-    if(!v||!v.startsWith(PREFIX))continue;
-    try{const buf=Buffer.from(v.slice(PREFIX.length),'base64');const d=crypto.createDecipheriv('aes-256-gcm',key,buf.slice(0,12));d.setAuthTag(buf.slice(12,28));process.env[k]=Buffer.concat([d.update(buf.slice(28)),d.final()]).toString('utf8');}catch{}
-  }
-})();
 
 // ── Crypto: derives AES key by scattering STREAM_KEY + CLIENT_ID bits ────────
 // Both keys are required. Key derivation interleaves bytes from each at
 // positions driven by the other key's char codes, then folds + PBKDF2.
 // Without SECRET.txt (which holds both keys) the .env is unreadable.
-(function decryptEnv() {
-  const PREFIX = 'enc:';
-  const SALT   = 'ChoctoTV-v2';
 
-  // Parse SECRET.txt
-  const secretFile = path.join(__dirname, 'SECRET.txt');
-  if (!fs.existsSync(secretFile)) {
-    console.warn('[crypto] SECRET.txt not found — env values not decrypted');
-    return;
-  }
-  const S = {};
-  for (const line of fs.readFileSync(secretFile, 'utf8').split('\n')) {
-    const clean = line.split('#')[0].trim();
-    const eq = clean.indexOf('=');
-    if (eq < 0) continue;
-    const k = clean.slice(0, eq).trim().toUpperCase();
-    const v = clean.slice(eq + 1).trim();
-    if (k && v && !k.startsWith('\u2550')) S[k] = v;
-  }
-
-  const streamKey = S['STREAM_KEY'] || '';
-  const clientId  = S['CLIENT_ID']  || '';
-  if (!streamKey || !clientId) {
-    console.warn('[crypto] SECRET.txt missing STREAM_KEY or CLIENT_ID');
-    return;
-  }
-
-  function deriveKey(sk_, ci_) {
-    const sk = Buffer.from(sk_, 'utf8');
-    const ci = Buffer.from(ci_, 'utf8');
-    const maxLen = Math.max(sk.length, ci.length) * 2 + 16;
-    const mixed  = Buffer.alloc(maxLen, 0);
-    let si = 0, cii = 0, mi = 0;
-    while (si < sk.length || cii < ci.length) {
-      if (si < sk.length) {
-        mixed[mi % maxLen] ^= sk[si];
-        const step = cii < ci.length ? (ci[cii % ci.length] % 3) + 1 : 1;
-        mi += step; si++;
-      }
-      if (cii < ci.length) {
-        mixed[mi % maxLen] ^= ci[cii];
-        const step = si < sk.length ? (sk[si % sk.length] % 3) + 1 : 1;
-        mi += step; cii++;
-      }
-    }
-    const rev = Buffer.from(ci_.split('').reverse().join(''), 'utf8');
-    for (let i = 0; i < maxLen; i++) {
-      mixed[i] ^= rev[i % rev.length];
-      mixed[i] ^= sk[(i * 7 + 3) % sk.length];
-    }
-    const half = Math.floor(maxLen / 2);
-    const seed = Buffer.alloc(half);
-    for (let i = 0; i < half; i++) seed[i] = mixed[i] ^ mixed[i + half] ^ (i & 0xff);
-    return crypto.pbkdf2Sync(seed, SALT, 100000, 32, 'sha256');
-  }
-
-  const key = deriveKey(streamKey, clientId);
-  let decrypted = 0;
-  for (const [k, v] of Object.entries(process.env)) {
-    if (!v || !v.startsWith(PREFIX)) continue;
-    try {
-      const buf = Buffer.from(v.slice(PREFIX.length), 'base64');
-      const d   = crypto.createDecipheriv('aes-256-gcm', key, buf.slice(0, 12));
-      d.setAuthTag(buf.slice(12, 28));
-      process.env[k] = Buffer.concat([d.update(buf.slice(28)), d.final()]).toString('utf8');
-      decrypted++;
-    } catch(e) {
-      console.error(`[crypto] Cannot decrypt ${k} — check SECRET.txt keys`);
-    }
-  }
-  if (decrypted) console.log(`[crypto] ${decrypted} value(s) decrypted`);
-})();
-
-const STREAM_KEY  = process.env.TWITCH_STREAM_KEY   || '';
-const RTMP_BASE   = process.env.TWITCH_RTMP_BASE     || 'rtmp://live.twitch.tv/app';
+const STREAM_KEY  = process.env.TWITCH_STREAM_KEY || process.env.STREAM_KEY || '';
+const RTMP_BASE   = process.env.TWITCH_RTMP_BASE  || process.env.RTMP_BASE || 'rtmp://live.twitch.tv/app';
 const RTMP_URL    = STREAM_KEY ? `${RTMP_BASE}/${STREAM_KEY}` : null;
-const RES         = process.env.STREAM_RESOLUTION    || '1280x720';
-const FPS         = parseInt(process.env.STREAM_FPS  || '60');
-const BITRATE     = process.env.STREAM_BITRATE       || '4500k';
-const AUDIO_BR    = process.env.STREAM_AUDIO_BITRATE || '128k';
+const RES         = '1280x720';   // Xvfb/capture size (fixed)
+// ── Output quality ────────────────────────────────────────────────────────────
+// Controlled ONLY by the !480 / !720 / !1080 chat commands (which write
+// vault/data/quality.txt and clean-reboot). NOT read from env/Secret. Default 480p.
+const QPRESETS = {
+  '1080p': { w:1920, h:1080, br:'6000k', fps:30 },
+  '720p':  { w:1280, h:720,  br:'3500k', fps:30 },
+  '480p':  { w:854,  h:480,  br:'1500k', fps:30 },
+};
+const QUALITY = (() => {
+  const fsM = require('fs'), pathM = require('path');
+  const qFile = pathM.join(__dirname, 'vault', 'data', 'quality.txt');
+  try {
+    const raw = fsM.readFileSync(qFile, 'utf8').trim().toLowerCase();
+    if (QPRESETS[raw]) {
+      if (raw !== '480p') console.warn(`[Stream] ⚠ quality.txt = "${raw}" — run !480 in chat to switch to 480p, or !${raw.replace('p','')} to keep it`);
+      return raw;
+    }
+    // Unknown value — reset to 480p and warn
+    console.warn(`[Stream] ⚠ Unknown quality "${raw}" in quality.txt — resetting to 480p`);
+    try { fsM.mkdirSync(pathM.dirname(qFile),{recursive:true}); fsM.writeFileSync(qFile,'480p'); } catch {}
+    return '480p';
+  } catch {
+    // File missing — seed it
+    try { fsM.mkdirSync(pathM.dirname(qFile),{recursive:true}); fsM.writeFileSync(qFile,'480p'); } catch {}
+    return '480p';
+  }
+})();
+const QP          = QPRESETS[QUALITY] || QPRESETS['480p'];
+const FPS         = QP.fps;
+// CPU thread budget — auto-detect, leave headroom for Chrome + Node
+const CPU_CORES   = (() => {
+  try { return require('os').cpus().length; } catch { return 2; }
+})();
+// Reserve the LAST core for music (mpv pins itself there). FFmpeg + Chrome use the rest.
+const MUSIC_CORE     = CPU_CORES >= 3 ? CPU_CORES - 1 : null;
+const RENDER_CORES   = MUSIC_CORE !== null
+  ? Array.from({ length: CPU_CORES - 1 }, (_, i) => i).join(',')  // cores 0..N-2
+  : null;
+const HAS_TASKSET    = (() => {
+  try { return require('child_process').spawnSync('taskset', ['--version'], { stdio:'ignore' }).status === 0; } catch { return false; }
+})();
+// Keep FFmpeg threads within the render-core budget (excludes the reserved music core)
+const FFMPEG_THREADS = Math.max(1, Math.min((MUSIC_CORE !== null ? CPU_CORES - 1 : CPU_CORES) - 1, 4));
+const BITRATE     = QP.br;
+const AUDIO_BR    = process.env.STREAM_AUDIO_BITRATE || '96k';   // lighter audio for smoother playback
 const DISPLAY_NUM = process.env.DISPLAY_NUM          || '99';
 const DISPLAY     = `:${DISPLAY_NUM}`;
-const OVL_PORT    = process.env.OVERLAY_PORT         || '8080';
-const EXT_OVERLAYS = [
-  process.env.OVERLAY_1 || '',
-  process.env.OVERLAY_2 || '',
-  process.env.OVERLAY_3 || '',
-].filter(Boolean);
-const OVL_URL     = process.env.OVERLAY_URL          || `http://localhost:${OVL_PORT}`;
+const OVL_PORT = parseInt(process.env.API_PORT||'3000');
+// Read OVERLAY_URL_1 through OVERLAY_URL_10 — add as many as needed in Secret file
+const EXT_OVERLAYS = Array.from({length:10}, (_,i) =>
+  process.env[`OVERLAY_URL_${i+1}`] || process.env[`OVERLAY_${i+1}`] || ''
+).filter(Boolean);
+const _OVL_BASE   = process.env.OVERLAY_URL          || `http://localhost:${OVL_PORT}`;
+const _STREAM_BUF = process.env.STREAM_BUFFER_MS || '3000';
+const OVL_URL     = `${_OVL_BASE}?streamBuffer=${_STREAM_BUF}`;
 const XVFB_WAIT   = parseInt(process.env.XVFB_WAIT   || '1200');
 const CHROME_WAIT = parseInt(process.env.CHROME_WAIT || '4000');
 const [W, H]      = RES.split('x').map(Number);
 
 let xvfbProc=null, chromeProc=null, ffmpegProc=null, compProc=null;
+let overlayProcs=[];  // additional overlay URL Chrome instances
 let stopping = false;
 let _pipelineGen = 0; // increments each startPipeline() call — stale timeouts abort
 
@@ -219,9 +183,11 @@ async function startPipeline() {
   log('Xvfb', `Starting on ${DISPLAY} @ ${RES}`);
   xvfbProc = spawn('Xvfb', [
     DISPLAY,
-    '-screen', '0', `${RES}x24`,
-    '-ac',
-    '-nolisten', 'tcp',
+    '-screen', '0', `${RES}x24`,  // 24-bit colour — faster than 32-bit on CPU
+    '-ac',                          // disable access control for Chrome
+    '-nolisten', 'tcp',             // no network connections
+    '-dpi', '96',                   // explicit DPI prevents font-size re-layouts
+    '-nocursor',                    // no cursor in virtual display
   ], { stdio:['ignore','ignore','pipe'] });
 
   xvfbProc.stderr && xvfbProc.stderr.on('data', d => {
@@ -230,10 +196,13 @@ async function startPipeline() {
   });
   xvfbProc.on('exit', c => {
     if (!stopping) {
+      if (stopping) return; // controlled shutdown — don't attempt restart
       warn('Xvfb', `Exited (${c}) — full restart in 10s`);
       // Kill Chrome and FFmpeg before restarting everything
       if (ffmpegProc) { try { ffmpegProc.kill('SIGTERM'); } catch {} ffmpegProc = null; }
       if (chromeProc) { try { chromeProc.kill('SIGTERM'); } catch {} chromeProc = null; }
+      for (const op of overlayProcs) { try { op.kill('SIGTERM'); } catch {} }
+      overlayProcs = [];
       if (compProc)   { try { compProc.kill('SIGTERM');   } catch {} compProc   = null; }
       setTimeout(startPipeline, 5000);
     }
@@ -278,6 +247,7 @@ async function startPipeline() {
     const paLoad = spawnSync('pactl', [
       'load-module', 'module-null-sink',
       'sink_name=choctotv_music',
+      'rate=44100', 'channels=2',          // match mpv output — no resampling in the chain
       'sink_properties=device.description=ChoctoTV_Music',
     ], { encoding:'utf8', timeout:3000, stdio:'pipe' });
 
@@ -346,18 +316,51 @@ async function startPipeline() {
     delete CHROME_ENV.WAYLAND_DISPLAY;
     delete CHROME_ENV.XDG_SESSION_TYPE;
 
-    chromeProc = spawn(chromeBin, [
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-      '--disable-software-rasterizer',
+    const _crBin = (RENDER_CORES && HAS_TASKSET) ? 'taskset' : chromeBin;
+    const _crPre = (RENDER_CORES && HAS_TASKSET) ? ['-c', RENDER_CORES, chromeBin] : [];
+    chromeProc = spawn(_crBin, [..._crPre,
+      // ── Virtual display: no physical GPU, use SwiftShader software renderer ──
+      '--disable-gpu',                               // Xvfb has no physical GPU
+      '--use-gl=swiftshader',                        // explicit SW rasterizer for stable rendering
+      '--disable-dev-shm-usage',                     // use /tmp for shared memory (VM-safe)
+      // REMOVED: --disable-software-rasterizer  ← was preventing SwiftShader, causing poor rendering
+
+      // ── Performance: prevent renderer/timer throttling when "backgrounded" ───
+      '--disable-background-timer-throttling',       // JS timers at full speed always
+      '--disable-renderer-backgrounding',            // renderer thread never deprioritised
+      '--disable-backgrounding-occluded-windows',    // no throttle when behind another window
+      '--disable-ipc-flooding-protection',           // allow fast WS message bursts
+      '--disable-hang-monitor',                      // no false hang-detect kills
+
+      // ── Memory: stable pressure handling ──────────────────────────────────────
+      '--memory-pressure-off',                       // no GC pressure events mid-frame
+      '--max-old-space-size=512',                    // cap V8 heap
+
+      // ── Rendering quality ───────────────────────────────────────────────────
+      '--force-color-profile=srgb',                  // consistent colours into FFmpeg
+      // ── CPU rendering: multi-thread SwiftShader rasterisation ──────────────
+      `--num-raster-threads=${Math.max(1, Math.floor(CPU_CORES / 2))}`,
+      '--enable-zero-copy',                          // avoid unnecessary buffer copies
+      '--disable-partial-raster',                    // full tiles only — more predictable CPU use
+      // ── Quality: keep AA and subpixel rendering for crisp overlay text ──────
+      '--enable-lcd-text-anti-aliasing',
+      '--force-renderer-accessibility=false',        // skip accessibility tree (unused, saves CPU)
+      '--font-render-hinting=full',                  // crisp text
+
+      // ── Minimal surface / no noise ──────────────────────────────────────────
       '--disable-extensions',
       '--disable-background-networking',
       '--disable-sync',
       '--no-first-run',
       '--noerrdialogs',
       '--disable-infobars',
+      '--disable-translate',
+      '--disable-features=TranslateUI',
       '--test-type',
       '--force-device-scale-factor=1',
+      '--disable-gpu-vsync',                         // no vsync stall — render as fast as possible
+      '--disable-frame-rate-limit',                  // remove 60fps cap on requestAnimationFrame
+      '--animation-duration-scale=1',                // CSS animations at real-time speed
       `--window-size=${W},${H}`,
       '--window-position=0,0',
       `--app=${OVL_URL}`,
@@ -369,7 +372,7 @@ async function startPipeline() {
     chromeProc.on('exit', (c, sig) => {
       chromeProc = null;
       if (stopping) return;
-      if (sig === 'SIGTERM' || sig === 'SIGKILL') return;
+      if (stopping || sig === 'SIGTERM' || sig === 'SIGKILL') return;
       warn('Chrome', `Exited (code=${c}) — will not auto-restart`);
     });
 
@@ -382,15 +385,21 @@ async function startPipeline() {
           if (!chromeBinO) return;
           log('Overlay', `Loading external overlay ${i+1}: ${url.slice(0,60)}`);
           const oc = spawn(chromeBinO, [
-            '--disable-gpu', '--disable-dev-shm-usage',
-            '--disable-software-rasterizer', '--disable-extensions',
-            '--no-first-run', '--noerrdialogs', '--disable-infobars', '--test-type',
-            '--force-device-scale-factor=1',
-            '--enable-transparent-visuals', '--disable-background-color',
-            `--window-size=${W},${H}`, '--window-position=0,0',
+            '--disable-gpu','--use-gl=swiftshader','--disable-dev-shm-usage',
+            '--disable-background-timer-throttling','--disable-renderer-backgrounding',
+            '--memory-pressure-off','--disable-extensions','--no-first-run',
+            '--noerrdialogs','--disable-infobars','--test-type',
+            '--force-device-scale-factor=1','--force-color-profile=srgb',
+            '--enable-transparent-visuals','--disable-background-color',
+            '--disable-gpu-vsync','--disable-frame-rate-limit',
+            `--window-size=${W},${H}`,'--window-position=0,0',
             `--app=${url}`,
           ], { env:CHROME_ENV, stdio:['ignore','ignore','pipe'] });
-          oc.on('exit', () => log('Overlay', `External overlay ${i+1} closed`));
+          overlayProcs.push(oc);
+          oc.on('exit', () => {
+            overlayProcs = overlayProcs.filter(p => p !== oc);
+            log('Overlay', `External overlay ${i+1} closed`);
+          });
         });
       }, CHROME_WAIT + 500);
     }
@@ -400,7 +409,7 @@ async function startPipeline() {
     // 6. FFmpeg
     setTimeout(() => {
       if (stopping) return;
-      if (!RTMP_URL) { warn('FFmpeg', 'No TWITCH_STREAM_KEY — overlay running but not streaming to Twitch'); return; }
+      if (!RTMP_URL) { warn('FFmpeg', 'No stream key found (TWITCH_STREAM_KEY or STREAM_KEY) — overlay running without Twitch stream'); return; }
 
       const useNvenc = hasNvenc();
       log('FFmpeg', `Encoder: ${useNvenc ? 'h264_nvenc (GPU)' : 'libx264 (CPU)'}`);
@@ -415,18 +424,59 @@ async function startPipeline() {
 function startFFmpeg() {
   if (stopping || !RTMP_URL) return;
   const useNvenc = hasNvenc();
+  // CPU-optimised x264 params — reduce encode complexity without visible quality loss:
+  //   bframes=0:  no B-frames → halves encoder lookahead work
+  //   ref=1:      single reference frame → faster motion search
+  //   weightp=0:  no weighted prediction → simpler encode path
+  //   sc_threshold=0: no scene-change detection → frees CPU every keyframe
+  const x264CPUParams = [
+    'nal-hrd=cbr',
+    'force-cfr=1',
+    'bframes=0',
+    'ref=1',
+    'weightp=0',
+    'rc-lookahead=0',
+    'sc_threshold=0',
+    `threads=${FFMPEG_THREADS}`,
+  ].join(':');
+
+  // Scale down to the chosen preset if it differs from the capture resolution
+  const [capW, capH] = RES.split('x').map(Number);
+  const needScale = (QP.w !== capW || QP.h !== capH);
+  const scaleArgs = needScale ? ['-vf', `scale=${QP.w}:${QP.h}:flags=fast_bilinear`] : [];
+  if (needScale) log('FFmpeg', `Scaling ${RES} → ${QP.w}x${QP.h} (${QUALITY})`);
+
   const videoArgs = useNvenc
-    ? ['-c:v','h264_nvenc','-preset','p4','-rc','cbr','-b:v',BITRATE,'-maxrate',BITRATE,'-bufsize',`${Math.round(parseInt(BITRATE)*1.5)}k`]
-    : ['-c:v','libx264','-preset','veryfast','-tune','zerolatency','-b:v',BITRATE,'-maxrate',BITRATE,'-bufsize',`${Math.round(parseInt(BITRATE)*1.5)}k`];
+    ? ['-c:v','h264_nvenc','-preset','p3','-rc','cbr','-b:v',BITRATE,'-maxrate',BITRATE,'-bufsize',`${Math.round(parseInt(BITRATE)*2)}k`,'-bf','0']
+    : ['-c:v','libx264','-preset','veryfast','-tune','zerolatency','-x264-params',x264CPUParams,'-b:v',BITRATE,'-maxrate',BITRATE,'-bufsize',`${Math.round(parseInt(BITRATE)*2)}k`];
 
-  log('FFmpeg', `Starting ${RES} ${FPS}fps ${BITRATE} via ${useNvenc?'NVENC':'x264'}`);
+  log('FFmpeg', `━━━ STREAM OUTPUT: ${QP.w}x${QP.h} (${QUALITY}) @ ${FPS}fps ${BITRATE} ━━━`);
+  log('FFmpeg', `Capture: ${RES} → ${needScale ? 'scaled to '+QP.w+'x'+QP.h : 'native'} | encoder: ${useNvenc?'NVENC':'x264'} | change with !480/!720/!1080`);
 
-  ffmpegProc = spawn('ffmpeg', [
-    '-f','x11grab','-video_size',RES,'-framerate',String(FPS),'-i',`${DISPLAY}.0`,
+  // Pin FFmpeg to render cores only — leaves the music core untouched
+  const _ffBin  = (RENDER_CORES && HAS_TASKSET) ? 'taskset' : 'ffmpeg';
+  const _ffPre  = (RENDER_CORES && HAS_TASKSET) ? ['-c', RENDER_CORES, 'ffmpeg'] : [];
+  if (RENDER_CORES && HAS_TASKSET) log('Stream', `FFmpeg pinned to cores ${RENDER_CORES} (music core ${MUSIC_CORE} reserved)`);
+  ffmpegProc = spawn(_ffBin, [..._ffPre,
+    // ── Global: multi-threaded decode+filter ──────────────────────────────────
+    '-threads', String(FFMPEG_THREADS),
+    // ── Capture: large thread queue prevents frame drops on CPU spike ─────────
+    '-thread_queue_size','1024',
+    '-f','x11grab','-video_size',RES,'-framerate',String(FPS),
+    '-draw_mouse','0',                             // skip mouse — saves encode cycles
+    '-i',`${DISPLAY}.0`,
+    // ── Audio ──────────────────────────────────────────────────────────────────
+    '-thread_queue_size','512',
     '-f','pulse','-i','choctotv_music.monitor',
+    // ── Scale (only if preset < capture) ───────────────────────────────────────
+    ...scaleArgs,
+    // ── Video codec ────────────────────────────────────────────────────────────
     ...videoArgs,
-    '-g',String(FPS*2),'-keyint_min',String(FPS),
-    '-c:a','aac','-b:a',AUDIO_BR,'-ar','48000',
+    '-pix_fmt','yuv420p',                          // Twitch-compatible chroma
+    '-g',String(FPS*2),'-keyint_min',String(FPS),  // 2-second GOP
+    // ── Audio codec ────────────────────────────────────────────────────────────
+    '-c:a','aac','-b:a',AUDIO_BR,'-ar','44100','-ac','2',  // 44.1kHz matches sink — no resample
+    // ── RTMP output ────────────────────────────────────────────────────────────
     '-f','flv', RTMP_URL,
   ], { stdio:['ignore','ignore','pipe'] });
 
@@ -446,15 +496,18 @@ function startFFmpeg() {
 }
 
 function shutdown(sig) {
+  if (stopping) return; // already shutting down — ignore repeated signals
   stopping = true;
   log('StreamCapture', `${sig} — shutting down...`);
   for (const [n, p] of [['ffmpeg',ffmpegProc],['chrome',chromeProc],['compositor',compProc],['Xvfb',xvfbProc]]) {
     if (p) { try { p.kill('SIGTERM'); log('',`  SIGTERM → ${n}`); } catch {} }
   }
-  setTimeout(() => process.exit(0), 1500);
+  setTimeout(() => process.exit(0), 2000);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+// SIGINT comes from Ctrl+C on the terminal process group — start.sh cleanup sends
+// an explicit SIGTERM via kill_pid, so we can safely ignore SIGINT here.
+process.on('SIGINT',  () => {});
 
 startPipeline();

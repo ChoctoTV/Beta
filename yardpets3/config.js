@@ -13,7 +13,7 @@ const CONFIG = {
     base: './assets',
     get spritesMeta() { return `${this.base}/sprites_meta.json`; },
     pupImage(name, rarity) {
-      return `${this.base}/pups/${(rarity||'common').toLowerCase()}/${name}.png`;
+      return `${this.base}/pups/${(rarity||'common').toLowerCase()}/${encodeURIComponent(name)}.png`;
     },
   },
 
@@ -32,3 +32,14 @@ const CONFIG = {
 };
 
 export default CONFIG;
+
+
+
+// ── Choctopi icon helper — use everywhere Choctopus amounts appear in overlay ──
+// choctopiImg(7)  → '<span class="choctopi-amount">7 <img ...></span>'
+// choctopiImg()   → just the <img> tag alone (no number)
+window.choctopiImg = function(n) {
+  const img = '<img src="/assets/choctopi.png" class="choctopi-icon" alt="Choctopus">';
+  if (n === undefined || n === null) return img;
+  return `<span class="choctopi-amount">${n} ${img}</span>`;
+};

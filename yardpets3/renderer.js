@@ -7,6 +7,23 @@ import CONFIG from './config.js';
 export { CONFIG };
 
 // ─── EventBus ─────────────────────────────────────────────────────────────────
+// Preload Google Fonts synchronously to prevent mid-render layout shifts
+(function preloadFonts() {
+  const fonts = [
+    'https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap',
+  ];
+  fonts.forEach(href => {
+    if (!document.querySelector(`link[href="${href}"]`)) {
+      const link = document.createElement('link');
+      link.rel = 'preload'; link.as = 'style'; link.href = href;
+      link.onload = () => { link.rel = 'stylesheet'; };
+      document.head.appendChild(link);
+    }
+  });
+  // Also preload choctopi icon
+  const icon = new Image(); icon.src = '/assets/choctopi.png';
+})();
+
 export const EventBus = (() => {
   const h = {};
   return {
@@ -17,14 +34,69 @@ export const EventBus = (() => {
 })();
 
 // ─── Stream delay ──────────────────────────────────────────────────────────────
-// Delays all gameplay events by BUFFER_MS so the overlay syncs with the
-// Twitch stream delay that viewers experience.
-const BUFFER_MS    = 10_000;
-const BYPASS_TYPES = new Set(['shutdown', 'settings']); // fire immediately
+// Delays gameplay events to sync with Twitch stream delay viewers experience.
+// Twitch Low Latency:  ~3-5s  → set streamBuffer=3000 in URL or rewardsEcon.txt
+// Twitch Normal:       ~10-15s → set streamBuffer=10000
+// Local testing / demo: set streamBuffer=0 to see animations instantly
+const p = new URLSearchParams(window.location.search);
+const BUFFER_MS    = parseInt(p.get('streamBuffer') ?? '3000', 10);
+const BYPASS_TYPES = new Set(['shutdown', 'settings', 'weather', 'lurk_update',
+  'classifieds_update', 'show_classifieds', 'show_classified_spotlight',
+  'show_favpup_card', 'daily_bonuses']); // fire immediately — not gameplay
+
+// ── Pre-warm NFT image cache from localStorage ───────────────────────────────
+// Any URL stored from a previous session gets pre-loaded into memory cache now
+// so the first favpup walk of the day doesn't stall waiting for network
+(function prewarmNFTCache() {
+  try {
+    const store = JSON.parse(localStorage.getItem('choctotv_nft_imgs') || '{}');
+    for (const url of Object.keys(store)) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { _nftImgPrewarm = _nftImgPrewarm || {}; _nftImgPrewarm[url] = img; };
+      img.src = url;
+    }
+  } catch {}
+})();
+let _nftImgPrewarm = {};
+
+// ── Cashout visual — floats choctopi.png above the overlay ──────────────────
+function showCashoutVisual(data) {
+  const el   = document.createElement('div');
+  const n    = data.choctopus || 0;
+  el.style.cssText = [
+    'position:fixed', 'left:50%', 'bottom:120px', 'transform:translateX(-50%)',
+    'display:flex', 'align-items:center', 'gap:10px',
+    'background:rgba(0,0,0,.75)', 'border-radius:16px',
+    'padding:12px 24px', 'color:#FFD700', 'font-size:28px', 'font-weight:700',
+    'z-index:9999', 'pointer-events:none',
+    'box-shadow:0 4px 24px rgba(0,0,0,.5)',
+    'animation:cfloat 3.2s ease-out forwards',
+  ].join(';');
+  el.innerHTML = `@${data.user || ''} ➜ ${window.choctopiImg ? window.choctopiImg(n) : n + ' Choctopus'} cashed out!`;
+  if (!document.getElementById('__cf_keyframes')) {
+    const s = document.createElement('style');
+    s.id = '__cf_keyframes';
+    s.textContent = '@keyframes cfloat{0%{opacity:0;transform:translateX(-50%) translateY(20px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-40px)}}';
+    document.head.appendChild(s);
+  }
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
 
 function dispatchMsg(msg) {
   EventBus.emit('server:event', msg);
   if (msg.type) EventBus.emit('event:' + msg.type, msg);
+        if (msg.type === 'cashout_confirm') showCashoutVisual(msg);
+        // Track last announcement for !lastannounce — send back to app via fetch
+        if (msg.type === 'announcements' && msg.announcements?.length) {
+          try {
+            const last = msg.announcements[msg.announcements.length - 1];
+            fetch('/api/lastannounce', { method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ text: last.text }) }).catch(()=>{});
+          } catch {}
+        }
 }
 
 // ─── Image cache ───────────────────────────────────────────────────────────────
@@ -88,6 +160,7 @@ export const getSprites        = ()       => _meta?.sprites || [];
 export const getSpritesMeta    = ()       => _meta;
 export const getSpritesByRarity = rarity  => (_meta?.sprites||[]).filter(s => (s.rarity||'').toLowerCase() === (rarity||'').toLowerCase());
 export const getSpriteByPupId  = id       => { const s=_meta?.sprites; if(!s?.length) return null; return s[Math.abs(parseInt(id)||0) % s.length]; };
+export const getSpriteByName   = name     => _meta?.sprites?.find(s => s.name === name) || null;
 export function getRandomSprite(rarity) {
   const pool = rarity ? getSpritesByRarity(rarity) : (_meta?.sprites||[]);
   const src  = pool.length ? pool : (_meta?.sprites||[]);
@@ -145,7 +218,7 @@ export function reconnectWS() { connectWS(); }
 const API = {
   EventBus, CONFIG,
   getSpritesMeta, getSprites, getSpritesByRarity,
-  getSpriteByPupId, getRandomSprite, getImageForSprite,
+  getSpriteByPupId, getSpriteByName, getRandomSprite, getImageForSprite,
 };
 
 async function loadModule(name, mountId, src) {
@@ -181,12 +254,18 @@ async function boot() {
 
   // Everything else in parallel
   await Promise.all([
-    loadModule('puppyWars',    'battle-mount',   './modules/puppyWars/puppyWars.js'),
-    loadModule('priceTicker',  'ticker-mount',   './modules/priceTicker/priceTicker.js'),
-    loadModule('settings',     'settings-mount', './modules/settings/settings.js'),
-    loadModule('streaming',    'stream-mount',   './modules/streaming/streaming.js'),
-    loadModule('queueDisplay', 'queue-mount',    './modules/queueDisplay/queueDisplay.js'),
+    loadModule('billboard',    'billboard-mount',    './modules/billboard/billboard.js'),
+    loadModule('classifieds',  'classifieds-mount', './modules/classifieds/classifieds.js'),
+    loadModule('choctoCal',   'calendar-mount',    './modules/choctoCalendar/choctoCalendar.js'),
+    loadModule('puppyWars',    'battle-mount',       './modules/puppyWars/puppyWars.js'),
+    loadModule('priceTicker',  'ticker-mount',    './modules/priceTicker/priceTicker.js'),
+    loadModule('settings',     'settings-mount',  './modules/settings/settings.js'),
+    loadModule('streaming',    'stream-mount',    './modules/streaming/streaming.js'),
+    loadModule('queueDisplay', 'queue-mount',     './modules/queueDisplay/queueDisplay.js'),
+    loadModule('moraleMeter',  'morale-mount',   './modules/moraleMeter/moraleMeter.js'),
+    loadModule('chestGame',    'chest-mount',    './modules/chestGame/chestGame.js'),
   ]);
+
 
   connectWS();
   if (CONFIG.demo) EventBus.emit('demo:start', {});

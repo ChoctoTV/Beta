@@ -12,7 +12,8 @@ const W = 1920, H = 1080;
 const WEATHER_TRANS_SPEED = 0.00167;
 const AUTO_WEATHER_MS     = 15 * 60 * 1000;
 const WEATHER_LIST        = ['sunny','cloudy','rainy','stormy','snowy','windy'];
-const MAX_WALKERS         = 10;
+const MAX_WALKERS         = 3;  // cap concurrent to reduce canvas load
+const MAX_PROJECTILES     = 4;  // cap concurrent toss/throw/dig/fish
 const MAX_HOLES           = 5;
 const HOLE_FADE_SPEED     = 0.007;
 
@@ -30,6 +31,8 @@ const WEATHER_FOG = {
   stormy:'rgba(10,18,45,.44)',    snowy:'rgba(200,220,255,.14)',
 };
 const RARITY_COL = {common:'#aaa',uncommon:'#2ecc71',rare:'#3498db',epic:'#9b59b6',legendary:'#f39c12'};
+
+
 const GAME_LABEL = {toss:'🎯 Toss!',throw:'🎾 Throw!',dig:'⛏️ Dig!',walk:'🐾 Walk!',fish:'🎣 Fish!'};
 const RARITIES   = ['common','uncommon','rare','epic','legendary'];
 const RAR_WT     = [50,25,15,7,3];
@@ -155,6 +158,16 @@ const Yard = {
 
   // queues
   gameQ:   {toss:[],throw:[],dig:[],fish:[]},
+  _favSky:    null,   // { top, mid, bot, fx, alpha, particles[] }
+  _fenceColor:null,    // hex string from diamond trait (active)
+  _skyRoll:null,       // pre-rendered day/night sky canvas (built once at init)
+  _skyRollH:0,         // height of the sky roll canvas
+  _skyOffset:0,        // current scroll position in px
+  _skyStartMs:0,       // Date.now() at init for offset calculation
+  _walkerColors:[],    // diamond colors of all currently-walking favPups
+  _fenceTimer:null,    // interval for cycling when multiple walkers
+  _imgCache:  {},     // url → HTMLImageElement cache
+  _favWalkBusy: false,
   gameBusy:{toss:false,throw:false,dig:false,fish:false},
   walkQ:[],walkers:[],walkBlocked:new Set(),walkPath:null,
 
@@ -171,10 +184,11 @@ const Yard = {
   gbmResult:null,        // {winningPick,winners,ties,losers,winReward,tieReward} for 6s
   gbmResultTs:0,
 
-  async init({mount,EventBus,CONFIG,getRandomSprite,getSpriteByPupId,getSpritesByRarity,getImageForSprite}){
-    Object.assign(this,{mount,EventBus,CONFIG,getRandomSprite,getSpriteByPupId,getSpritesByRarity,getImageForSprite});
+  async init({mount,EventBus,CONFIG,getRandomSprite,getSpriteByPupId,getSpriteByName,getSpritesByRarity,getImageForSprite}){
+    Object.assign(this,{mount,EventBus,CONFIG,getRandomSprite,getSpriteByPupId,getSpriteByName,getSpritesByRarity,getImageForSprite});
     const{grassY,puppyWarsY}=CONFIG.layout;
     this.walkPath=makePerimeterPath(grassY,puppyWarsY);
+    this._buildSkyRoll(grassY); // pre-render sky cycle once
     this._buildDOM();
     this._injectCSS();
     this.clouds=Array.from({length:10},()=>mkCloud(Math.random()*W));
@@ -197,6 +211,12 @@ const Yard = {
 
   _buildDOM(){
     this.mount.style.cssText='position:absolute;inset:0;width:1920px;height:1080px;overflow:hidden;';
+    // Sky canvas — sits BELOW the billboard (z3) so the billboard shows against the sky.
+    // Weather stays on the main canvas (z10) so rain/snow render IN FRONT of the billboard.
+    const skyCv=document.createElement('canvas');skyCv.width=W;skyCv.height=H;
+    skyCv.style.cssText='position:absolute;inset:0;z-index:3;pointer-events:none;';
+    this.skyCtx=skyCv.getContext('2d');
+    (this.mount.parentNode||document.body).insertBefore(skyCv, this.mount);
     const cv=document.createElement('canvas');cv.width=W;cv.height=H;cv.style.cssText='position:absolute;inset:0;';this.ctx=cv.getContext('2d');this.mount.appendChild(cv);
     this.spriteLayer=document.createElement('div');this.spriteLayer.style.cssText='position:absolute;inset:0;pointer-events:none;';this.mount.appendChild(this.spriteLayer);
     const pc=document.createElement('canvas');pc.width=W;pc.height=H;pc.style.cssText='position:absolute;inset:0;pointer-events:none;';this.pCtx=pc.getContext('2d');this.mount.appendChild(pc);
@@ -265,20 +285,29 @@ const Yard = {
 
   _mkWxParticles(w){
     this.wx=[];
-    if(w==='rainy')       for(let i=0;i<72;i++) this.wx.push(mkRain(false));
-    else if(w==='stormy') for(let i=0;i<130;i++)this.wx.push(mkRain(true));
-    else if(w==='snowy')  for(let i=0;i<117;i++)this.wx.push(mkSnow());
-    else if(w==='windy')  for(let i=0;i<50;i++) this.wx.push(mkWind());
+    if(w==='rainy')       for(let i=0;i<43;i++) this.wx.push(mkRain(false));
+    else if(w==='stormy') for(let i=0;i<77;i++) this.wx.push(mkRain(true));
+    else if(w==='snowy')  for(let i=0;i<70;i++) this.wx.push(mkSnow());
+    else if(w==='windy')  for(let i=0;i<29;i++) this.wx.push(mkWind());
   },
 
+  _drawNeeded:true,   // force first draw
+
   _startLoop(){
+    const TARGET_MS = 1000/30;  // 30fps cap — stream is 30fps, 60fps wastes CPU
+    let lastTs=0;
     const loop=ts=>{
-      // Schedule next frame FIRST — ensures the loop never dies even if tick/draw throws
       this.raf=requestAnimationFrame(loop);
+      const elapsed=ts-lastTs;
+      if(elapsed<TARGET_MS) return;          // skip frame — not time yet
+      const dt=Math.min(elapsed/16.67,3);
+      lastTs=ts-(elapsed%TARGET_MS);         // avoid drift accumulation
       try{
-        const dt=Math.min((ts-(this.lt||ts))/16.67,3);this.lt=ts;
-        this._tick(dt);
-        this._draw();
+        const active=this._tick(dt);  // returns true if something is animating
+        if(active||this._drawNeeded){
+          this._draw();
+          this._drawNeeded=false;
+        }
       }catch(e){
         console.error('[Yard] RAF error (recovering):', e);
       }
@@ -287,6 +316,19 @@ const Yard = {
   },
 
   _tick(dt){
+    // Dispatch time-of-day ~1/sec for billboard lights
+    if(!this._lastDayEvt||Date.now()-this._lastDayEvt>1000){this._lastDayEvt=Date.now();const _cp=this._skyStartMs?(((Date.now()-this._skyStartMs)/900000)%1):0.25;const _nt=0.5-0.5*Math.cos((_cp-0.25)*2*Math.PI);try{window.dispatchEvent(new CustomEvent('chocto:daytime',{detail:{cycleP:_cp,night:_nt}}));}catch{}}
+    // Returns true if any animation is active (tells loop to redraw)
+    const hasWeather = this.wt < 1 || this.wx.length > 0;
+    const hasWalkers  = this.walkers.length > 0 || this.walkQ.length > 0;
+    const hasProjs    = this.projectiles.length > 0;
+    const hasMovers   = this.movers.length > 0;
+    const hasClouds   = this.clouds.some(c => Math.abs(c.vx) > 0.01);
+    const hasFavSky   = !!(this._favSky);
+    const hasHoles    = this.holes?.some(h => h.alpha > 0);
+    const hasLightning= this.lightning > 0;
+    const hasSkyRoll  = !!this._skyRoll;  // scrolling sky always animates → always redraw
+    const isActive    = hasSkyRoll||hasWeather||hasWalkers||hasProjs||hasMovers||hasFavSky||hasHoles||hasLightning;
     if(this.wt<1){
       this.wt=Math.min(1,this.wt+dt*WEATHER_TRANS_SPEED);
       if(this.wt>=1){this.weather=this.target;this._mkWxParticles(this.weather);}
@@ -295,6 +337,10 @@ const Yard = {
     this.fogAlpha=lerp(this.fogAlpha,WEATHER_FOG[curW]?smooth(Math.min(1,this.wt*1.8)):0,dt*.025);
     this.sun=(this.sun+dt*.00018)%(Math.PI*2);
     this.dayPhase=clamp(this.dayPhase+dt*this.DAY_SPEED*this.dayDir,0,1);
+    // Advance sky roll offset (real-time based, not dt, for perfect accuracy)
+    if (this._skyRoll) {
+      this._skyOffset = ((Date.now() - this._skyStartMs) / 900000 * this._skyRollH) % this._skyRollH;
+    }
     if(this.dayPhase>=1)this.dayDir=-1;else if(this.dayPhase<=0)this.dayDir=1;
     if(this.weather==='stormy'||this.target==='stormy'){if(Math.random()<.001*dt)this.lightning=1.8+rand(0,.6);}else this.lightning=0;
     if(this.lightning>0)this.lightning=Math.max(0,this.lightning-dt*.09);
@@ -312,6 +358,7 @@ const Yard = {
     this.holes.forEach(h=>{if(h.evicting)h.alpha=Math.max(0,h.alpha-HOLE_FADE_SPEED*dt);});
     this.holes=this.holes.filter(h=>h.alpha>0);
     this._tickWalkers(dt);
+    return isActive;  // tells RAF loop whether to redraw
   },
 
   // ── Projectile physics ───────────────────────────────────────────────────────
@@ -355,44 +402,126 @@ const Yard = {
   },
 
   // ── Draw ─────────────────────────────────────────────────────────────────────
+  // Sky color phases keyed by cycleP — interpolated for smooth fade across day cycle
+  _skyPhases: [
+    { p:0.00, top:'#E8603C', bot:'#F4A460' },  // dawn
+    { p:0.08, top:'#5BA3D9', bot:'#C5DDEF' },  // early morning
+    { p:0.25, top:'#1A6FBF', bot:'#7EC8E3' },  // midday
+    { p:0.42, top:'#3D90CC', bot:'#B0DCF0' },  // afternoon
+    { p:0.50, top:'#E8603C', bot:'#D4774B' },  // dusk
+    { p:0.58, top:'#4B1F6F', bot:'#7B3F9E' },  // evening twilight
+    { p:0.75, top:'#050510', bot:'#0A1020' },  // midnight
+    { p:0.92, top:'#1A1240', bot:'#3B1F70' },  // pre-dawn
+    { p:1.00, top:'#E8603C', bot:'#F4A460' },  // dawn (loop)
+  ],
+  _lerpHex(a, b, t) {
+    const h = s => parseInt(s,16);
+    const r = c => Math.max(0,Math.min(255,Math.round(c)));
+    const ah = [h(a.slice(1,3)),h(a.slice(3,5)),h(a.slice(5,7))];
+    const bh = [h(b.slice(1,3)),h(b.slice(3,5)),h(b.slice(5,7))];
+    return '#'+[0,1,2].map(i=>r(ah[i]+(bh[i]-ah[i])*t).toString(16).padStart(2,'0')).join('');
+  },
+  _skyColorAt(cycleP) {
+    const ph = this._skyPhases;
+    let i = 0;
+    while (i < ph.length-1 && ph[i+1].p <= cycleP) i++;
+    const a = ph[i], b = ph[Math.min(i+1,ph.length-1)];
+    const t = (b.p > a.p) ? (cycleP - a.p) / (b.p - a.p) : 0;
+    return { top: this._lerpHex(a.top, b.top, t), bot: this._lerpHex(a.bot, b.bot, t) };
+  },
+
   _draw(){
     const c=this.ctx;
+    const sky=this.skyCtx||c;   // sky renders on its own below-billboard canvas
     const t=smooth(clamp(this.wt,0,1));
     const{grassY,pondX,pondY,puppyWarsY}=this.CONFIG.layout;
+    // Keep the main canvas transparent above the ground so the billboard shows through;
+    // weather particles drawn later on `c` still appear in front of the billboard.
+    if(this.skyCtx) c.clearRect(0,0,W,grassY);
     const fw=this.weather,tw=this.target;
     const curW=t>.5?tw:fw;
-    const night=smooth(this.dayPhase);
+    // One day-cycle clock (15 min) drives sky color, star/cloud dimming AND the sun/moon arc.
+    const cycleP = this._skyStartMs
+      ? (((Date.now() - this._skyStartMs) / 900000) % 1)
+      : (this.dayDir >= 0 ? this.dayPhase*0.5 : 1 - this.dayPhase*0.5);
+    // night: 0 at midday (cycleP .25), 1 at midnight (cycleP .75)
+    const night = 0.5 - 0.5*Math.cos((cycleP - 0.25) * 2 * Math.PI);
 
-    const sTop=lerpCol(lerpCol(SKY[fw].top,SKY[tw].top,t),SKY_NIGHT.top,night*.88);
-    const sBot=lerpCol(lerpCol(SKY[fw].bot,SKY[tw].bot,t),SKY_NIGHT.bot,night*.88);
-    const sg=c.createLinearGradient(0,0,0,grassY);sg.addColorStop(0,sTop);sg.addColorStop(1,sBot);
-    c.fillStyle=sg;c.fillRect(0,0,W,grassY);
+    let sTop=lerpCol(lerpCol(SKY[fw].top,SKY[tw].top,t),SKY_NIGHT.top,night*.88);
+    let sBot=lerpCol(lerpCol(SKY[fw].bot,SKY[tw].bot,t),SKY_NIGHT.bot,night*.88);
+    const fs = this._favSky;
+    if (fs && fs.alpha > 0) {
+      sTop = lerpCol(sTop, fs.top, fs.alpha);
+      sBot = lerpCol(sBot, fs.bot, fs.alpha);
+    }
+    // Draw pre-rendered sky roll (time-based scrolling — one blit replaces gradient calc)
+    if(this.skyCtx) sky.clearRect(0,0,W,grassY);
+    // ── Fading sky: interpolate between day-cycle color phases (no scroll) ──────
+    const { top:skyTop, bot:skyBot } = this._skyColorAt(cycleP);
+    // Blend with weather tint
+    const wTintA={sunny:0,cloudy:0.12,rainy:0.22,stormy:0.42,snowy:0.14,windy:0.06};
+    const wTintC={sunny:'#b8d4f0',cloudy:'#b4b4c8',rainy:'#506488',stormy:'#1a1a3c',snowy:'#c8dcff',windy:'#b4c8a0'};
+    const wKey = t>.5 ? tw : fw;
+    const wBlend = wTintA[wKey] || 0;
+    const skyGrad = sky.createLinearGradient(0,0,0,grassY);
+    skyGrad.addColorStop(0, skyTop);
+    skyGrad.addColorStop(1, skyBot);
+    sky.fillStyle = skyGrad;
+    sky.fillRect(0,0,W,grassY);
+    if(wBlend>0){sky.save();sky.globalAlpha=wBlend;sky.fillStyle=wTintC[wKey]||'#000';sky.fillRect(0,0,W,grassY);sky.restore();}
+    // favSky overlay (fav pup sky config)
+    if(fs&&fs.alpha>0&&fs.top&&fs.bot){
+      sky.save();sky.globalAlpha=fs.alpha*.45;
+      const fsg=sky.createLinearGradient(0,0,0,grassY);fsg.addColorStop(0,fs.top);fsg.addColorStop(1,fs.bot);
+      sky.fillStyle=fsg;sky.fillRect(0,0,W,grassY);sky.restore();
+    }
 
     if(night>.08&&curW!=='stormy'){
-      c.save();
-      for(let i=0;i<130;i++){const sx=(Math.sin(i*137.508)*.5+.5)*W,sy=(Math.cos(i*97.3)*.5+.5)*grassY*.9;c.globalAlpha=night*.88*(0.55+Math.sin(i*7.3+this.sun*3)*.45);c.fillStyle='#fff';c.beginPath();c.arc(sx,sy,.6+Math.sin(i*13.7)*.5,0,Math.PI*2);c.fill();}
-      c.restore();
+      // Stars: pre-rendered to offscreen canvas, just composite with globalAlpha
+      if(!this._starCanvas){
+        this._starCanvas=document.createElement('canvas');
+        this._starCanvas.width=W;this._starCanvas.height=grassY;
+        const sc=this._starCanvas.getContext('2d');
+        // Render all 130 stars at full brightness once
+        for(let i=0;i<130;i++){
+          const sx=(Math.sin(i*137.508)*.5+.5)*W, sy=(Math.cos(i*97.3)*.5+.5)*grassY*.9;
+          sc.globalAlpha=0.55+Math.sin(i*7.3)*.45;
+          sc.fillStyle='#fff';sc.beginPath();sc.arc(sx,sy,.6+Math.sin(i*13.7)*.5,0,Math.PI*2);sc.fill();
+        }
+      }
+      sky.save();sky.globalAlpha=night*.88;sky.drawImage(this._starCanvas,0,0);sky.restore();
     }
 
-    if((curW==='sunny'||curW==='windy'||curW==='cloudy')&&night<.65){
-      const sx=W-180+Math.cos(this.sun)*22,sy=70+Math.sin(this.sun)*12;
-      c.save();c.globalAlpha=(1-night)*(curW==='cloudy'?.38:1);
-      const sr=c.createRadialGradient(sx,sy,0,sx,sy,95);sr.addColorStop(0,'rgba(255,255,200,1)');sr.addColorStop(.22,'rgba(255,220,80,.95)');sr.addColorStop(.55,'rgba(255,200,0,.28)');sr.addColorStop(1,'rgba(255,180,0,0)');
-      c.fillStyle=sr;c.beginPath();c.arc(sx,sy,95,0,Math.PI*2);c.fill();c.fillStyle='#FFFDE7';c.beginPath();c.arc(sx,sy,30,0,Math.PI*2);c.fill();c.restore();
+    // ── Sun & moon arc ACROSS the sky (left→right), sharing the same day-cycle clock ──
+    const arcTop = 46, arcBot = grassY * 0.62;          // peak height vs horizon
+    // SUN — visible during the day half (cycleP 0..0.5), arcs across the full width
+    if (cycleP < 0.5 && (curW==='sunny'||curW==='windy'||curW==='cloudy')) {
+      const dp = cycleP / 0.5;                           // 0→1 across the day
+      const sx = dp * W;
+      const sy = arcBot - Math.sin(dp * Math.PI) * (arcBot - arcTop);
+      const edge = Math.sin(dp * Math.PI);               // fade near horizon (rise/set)
+      sky.save();sky.globalAlpha = Math.min(1, edge*1.4) * (curW==='cloudy'?.4:1);
+      const sr=sky.createRadialGradient(sx,sy,0,sx,sy,95);sr.addColorStop(0,'rgba(255,255,200,1)');sr.addColorStop(.22,'rgba(255,220,80,.95)');sr.addColorStop(.55,'rgba(255,200,0,.28)');sr.addColorStop(1,'rgba(255,180,0,0)');
+      sky.fillStyle=sr;sky.beginPath();sky.arc(sx,sy,95,0,Math.PI*2);sky.fill();sky.fillStyle='#FFFDE7';sky.beginPath();sky.arc(sx,sy,30,0,Math.PI*2);sky.fill();sky.restore();
     }
-    if(night>.3){
-      const mx=220+Math.cos(this.sun+Math.PI)*18,my=72+Math.sin(this.sun+Math.PI)*10;
-      c.save();c.globalAlpha=smooth((night-.3)/.7);const mr=c.createRadialGradient(mx,my,0,mx,my,38);mr.addColorStop(0,'rgba(240,248,255,1)');mr.addColorStop(.6,'rgba(200,220,255,.8)');mr.addColorStop(1,'rgba(150,180,255,0)');c.fillStyle=mr;c.beginPath();c.arc(mx,my,38,0,Math.PI*2);c.fill();c.restore();
+    // MOON — visible during the night half (cycleP 0.5..1), arcs across the full width
+    if (cycleP >= 0.5) {
+      const np = (cycleP - 0.5) / 0.5;                   // 0→1 across the night
+      const mx = np * W;
+      const my = arcBot - Math.sin(np * Math.PI) * (arcBot - arcTop);
+      const edge = Math.sin(np * Math.PI);
+      sky.save();sky.globalAlpha = Math.min(1, edge*1.4);
+      const mr=sky.createRadialGradient(mx,my,0,mx,my,38);mr.addColorStop(0,'rgba(240,248,255,1)');mr.addColorStop(.6,'rgba(200,220,255,.8)');mr.addColorStop(1,'rgba(150,180,255,0)');sky.fillStyle=mr;sky.beginPath();sky.arc(mx,my,38,0,Math.PI*2);sky.fill();sky.restore();
     }
 
-    c.save();c.beginPath();c.rect(0,0,W,grassY-10);c.clip();
+    sky.save();sky.beginPath();sky.rect(0,0,W,grassY-10);sky.clip();
     this.clouds.forEach(cl=>{
       let bv=curW==='stormy'?55:curW==='rainy'?130:curW==='cloudy'?195:250;bv=Math.round(bv*(1-night*.55));
-      c.save();c.globalAlpha=cl.op*(curW==='sunny'?.78:curW==='stormy'?.52:.93)*(1-night*.28);c.fillStyle=`rgb(${bv},${bv},${bv})`;c.shadowColor=`rgba(0,0,0,${curW==='stormy'?.45:.12})`;c.shadowBlur=10;
-      cl.puffs.forEach(p=>{c.beginPath();c.arc(cl.x+p.dx*cl.scale,cl.y+p.dy*cl.scale,p.r*cl.scale,0,Math.PI*2);c.fill();});c.restore();
-    });c.restore();
+      sky.save();sky.globalAlpha=cl.op*(curW==='sunny'?.78:curW==='stormy'?.52:.93)*(1-night*.28);sky.fillStyle=`rgb(${bv},${bv},${bv})`;sky.shadowColor=`rgba(0,0,0,${curW==='stormy'?.45:.12})`;sky.shadowBlur=10;
+      cl.puffs.forEach(p=>{sky.beginPath();sky.arc(cl.x+p.dx*cl.scale,cl.y+p.dy*cl.scale,p.r*cl.scale,0,Math.PI*2);sky.fill();});sky.restore();
+    });sky.restore();
 
-    if(this.fogAlpha>.005&&WEATHER_FOG[curW]){c.save();c.globalAlpha=this.fogAlpha;c.fillStyle=WEATHER_FOG[curW];c.fillRect(0,0,W,grassY);c.restore();}
+    if(this.fogAlpha>.005&&WEATHER_FOG[curW]){sky.save();sky.globalAlpha=this.fogAlpha;sky.fillStyle=WEATHER_FOG[curW];sky.fillRect(0,0,W,grassY);sky.restore();}
     const flash=Math.sin(Math.PI*this.wt)*.07;
     if(flash>.004&&(fw==='stormy'||tw==='stormy')){c.save();c.globalAlpha=flash;c.fillStyle='#000';c.fillRect(0,0,W,grassY);c.restore();}
     if(this.lightning>0){
@@ -502,13 +631,21 @@ const Yard = {
   _drawFence(c,gy,night){
     const PW=14,GAP=26,PH=75,RH=10,RT=gy-52,RB=gy-22;
     const bv=Math.round(248*(1-night*.55));
+    const dc = this._fenceColor; // diamond override
     c.save();c.shadowColor='rgba(0,0,0,.22)';c.shadowBlur=6;c.shadowOffsetX=2;c.shadowOffsetY=2;
-    c.fillStyle=`rgb(${bv},${bv},${bv})`;c.fillRect(0,RT,W,RH);c.fillRect(0,RB,W,RH);
+    // Rails
+    c.fillStyle = dc ? dc : `rgb(${bv},${bv},${bv})`;
+    if (dc) { c.shadowColor = dc; c.shadowBlur = 12; }
+    c.fillRect(0,RT,W,RH);c.fillRect(0,RB,W,RH);
     c.fillStyle=`rgba(0,0,0,${night>.2?.14:.06})`;c.fillRect(0,RT+RH-3,W,3);c.fillRect(0,RB+RH-3,W,3);
+    // Pickets
     for(let x=0;x<W+PW;x+=PW+GAP){
-      const v=Math.round(245*(1-night*.5));c.fillStyle=`rgb(${v},${v},${v})`;
+      const v=Math.round(245*(1-night*.5));
+      c.fillStyle = dc ? dc : `rgb(${v},${v},${v})`;
+      if (dc) { c.shadowColor = dc; c.shadowBlur = 14; }
       c.beginPath();c.moveTo(x,gy-PH);c.lineTo(x+PW/2,gy-PH-16);c.lineTo(x+PW,gy-PH);c.lineTo(x+PW,gy+8);c.lineTo(x,gy+8);c.closePath();c.fill();
-      c.strokeStyle='rgba(255,255,255,.48)';c.lineWidth=1;c.beginPath();c.moveTo(x+1.5,gy+6);c.lineTo(x+1.5,gy-PH);c.stroke();
+      c.strokeStyle = dc ? 'rgba(255,255,255,.7)' : 'rgba(255,255,255,.48)';
+      c.lineWidth=1;c.beginPath();c.moveTo(x+1.5,gy+6);c.lineTo(x+1.5,gy-PH);c.stroke();
     }c.restore();
   },
 
@@ -628,7 +765,18 @@ const Yard = {
   _cycleWeather(){const i=WEATHER_LIST.indexOf(this.target);this._setWeather(WEATHER_LIST[(i+1)%WEATHER_LIST.length]);},
 
   _bind(){
-    this.EventBus.on('event:game',    m=>this._onGame(m));
+    this.EventBus.on('event:game',        m=>this._onGame(m));
+
+    // Pre-cache bg removal when favPup image URL arrives — zero delay on first walk
+    this.EventBus.on('event:pupcore:state', ev => {
+      const url = ev.state?.favPupImageURL;
+      if (url && !this._bgCache.has(url)) {
+        this._loadCachedImg(url)
+          .then(img => { if (img) this._removeBgAsync(img, url); })
+          .catch(() => {});
+      }
+    });
+
     this.EventBus.on('event:weather', m=>this._setWeather(m.weather));
     this.EventBus.on('demo:start',    ()=>this._demoOn());
     this.EventBus.on('demo:stop',     ()=>this._demoOff());
@@ -666,31 +814,270 @@ const Yard = {
     if(!this.gameQ[game].length){this.gameBusy[game]=false;return;}
     this.gameBusy[game]=true;
     const msg=this.gameQ[game].shift();
-    const sprite=this._resolveSprite(msg.pupId);
+    // PupCore state drives the image. App.js already decided whether to feature
+    // the fav pup (10% on toss/throw/dig, separate fish mechanic). When
+    // msg.pcImageURL is set, we use it — no independent roll here.
+    const sprite = this._resolveSprite(msg.pupId);
+    const hero   = await this._resolveHeroImages(msg, sprite); // {animImg,popupImg,pupName,rarity}
     try{
-      if(game==='toss')  await this._doToss(sprite,msg);
-      else if(game==='throw') await this._doThrow(sprite,msg);
-      else if(game==='dig')   await this._doDig(sprite,msg);
-      else if(game==='fish')  await this._doFish(msg);
+      if(game==='toss')  await this._doToss(sprite,msg,hero);
+      else if(game==='throw') await this._doThrow(sprite,msg,hero);
+      else if(game==='dig')   await this._doDig(sprite,msg,hero);
+      else if(game==='fish')  await this._doFish(msg,hero);
     }catch(e){
       console.error('[Yard] ERROR in', game, ':', e.message, e.stack);
       window.onerror && window.onerror('[Yard:'+game+'] '+e.message,'yard.js',0,0,e);
     }
     this._runQ(game);
   },
-  _resolveSprite(pupId){
-    const s=(pupId&&this.getSpriteByPupId&&this.getSpriteByPupId(pupId))||(this.getRandomSprite&&this.getRandomSprite())||null;
-    if(!s) console.warn('[Yard] _resolveSprite returned null for pupId='+pupId+' sprites loaded='+(this.getSprites?this.getSprites().length:'?'));
-    return s;
+  // ── Generic sky config — set by PupCore Bot state, no blockchain logic ────────
+  // ── Pre-rendered sky roll — built once, scrolled each frame ─────────────────
+  // One full loop = weather_min_ms (15 min). Phases: midnight→dawn→noon→dusk→midnight.
+  _buildSkyRoll(grassY) {
+    try {
+    const W = this.CONFIG?.layout?.width || 1920;
+    // 16 segments × grassY px each → smooth 15-min scrolling loop
+    const SEG  = Math.round(grassY);
+    const SEGS = 16;
+    const H    = SEG * SEGS;
+    const cv   = document.createElement('canvas');
+    cv.width   = W; cv.height = H;
+    const c    = cv.getContext('2d');
+
+    // Sky color phases for a full day cycle (top, bottom of sky) — 17 stops (0=16 wraps)
+    const STOPS = [
+      ['#03030f','#0a0825'],   //  0/16  deep night
+      ['#06051a','#120f40'],   //  1/16  late night
+      ['#0e0830','#1e1260'],   //  2/16  pre-dawn deep
+      ['#2a0e5e','#8a2070'],   //  3/16  pre-dawn purple
+      ['#8a2060','#e84c28'],   //  4/16  dawn break
+      ['#c84828','#f5a030'],   //  5/16  sunrise
+      ['#5090d8','#f8c870'],   //  6/16  early morning
+      ['#3878c8','#a8d8f8'],   //  7/16  morning
+      ['#1860c0','#78c8f0'],   //  8/16  noon
+      ['#2070c8','#88d0f8'],   //  9/16  midday
+      ['#2878c0','#a0c8e8'],   // 10/16  afternoon
+      ['#3870a8','#d8a848'],   // 11/16  golden hour
+      ['#c04820','#f06020'],   // 12/16  sunset
+      ['#882050','#c84860'],   // 13/16  dusk
+      ['#2a0e50','#5a1850'],   // 14/16  evening
+      ['#0a0620','#18103a'],   // 15/16  night
+      ['#03030f','#0a0825'],   // 16/16  deep night (= stop 0, seamless loop)
+    ];
+
+    for (let i = 0; i < SEGS; i++) {
+      const y0  = i * SEG;
+      const y1  = (i + 1) * SEG;
+      // Vertical gradient within this segment: top of sky → horizon
+      // Top colour blends from stops[i] to stops[i+1] across the segment
+      const [t0, b0] = STOPS[i];
+      const [t1, b1] = STOPS[i + 1];
+      // Draw in 2 halves: top-to-mid and mid-to-bottom for 2D colour accuracy
+      const midY = y0 + SEG / 2;
+      let g = c.createLinearGradient(0, y0, 0, midY);
+      g.addColorStop(0, t0); g.addColorStop(1, t1);
+      c.fillStyle = g; c.fillRect(0, y0, W, SEG / 2);
+
+      g = c.createLinearGradient(0, midY, 0, y1);
+      g.addColorStop(0, b0); g.addColorStop(1, b1);
+      c.fillStyle = g; c.fillRect(0, midY, W, SEG / 2);
+    }
+
+    this._skyRoll  = cv;
+    this._skyRollH = H;
+    this._skyStartMs = Date.now();
+    console.log('[Yard] Sky roll built:', W + 'x' + H);
+    } catch(e) {
+      console.warn('[Yard] Sky roll failed, using gradient fallback:', e.message);
+      this._skyRoll = null;
+    }
   },
 
+  // ── Called when a walker with a diamond color starts or ends ─────────────────
+  _updateFenceCycle() {
+    if (this._fenceTimer) { clearInterval(this._fenceTimer); this._fenceTimer = null; }
+    const cols = [...new Set(this._walkerColors.filter(Boolean))];
+    if (cols.length === 0)      { this._fenceColor = null; }
+    else if (cols.length === 1) { this._fenceColor = cols[0]; }
+    else {
+      // Multiple fav pups with diamonds — cycle through their colors every 2s
+      let idx = 0;
+      this._fenceColor = cols[0];
+      this._fenceTimer = setInterval(() => {
+        idx = (idx + 1) % cols.length;
+        this._fenceColor = cols[idx];
+      }, 2000);
+    }
+  },
+
+  _setSkyCfg(cfg) {
+    if (!cfg) return;
+    if (this._favSky) { Object.assign(this._favSky, cfg); return; }
+    this._favSky = { ...cfg, alpha: 0 };
+    const fade = () => {
+      if (!this._favSky) return;
+      this._favSky.alpha = Math.min(1, this._favSky.alpha + 0.04);
+      if (this._favSky.alpha < 1) requestAnimationFrame(fade);
+    };
+    requestAnimationFrame(fade);
+  },
+  _clearSkyCfg() {
+    if (!this._favSky || this._favSky._clearing) return;
+    this._favSky._clearing = true;
+    const fade = () => {
+      if (!this._favSky) return;
+      this._favSky.alpha = Math.max(0, this._favSky.alpha - 0.025);
+      if (this._favSky.alpha > 0) requestAnimationFrame(fade);
+      else { this._favSky = null; if (!this._walkerColors.length) this._fenceColor = null; }
+    };
+    requestAnimationFrame(fade);
+  },
+  _addSparkle(el, color) {
+    if (!color || !el) return;
+    const styleId = '__pcSparkle_' + color.replace('#','');
+    if (!document.getElementById(styleId)) {
+      const s = document.createElement('style'); s.id = styleId;
+      s.textContent = `@keyframes pcSpkl${styleId}{0%,100%{filter:drop-shadow(0 0 4px ${color});}50%{filter:drop-shadow(0 0 14px ${color}) brightness(1.15);}}`;
+      document.head.appendChild(s);
+    }
+    el.style.animation = `pcSpkl${styleId} 1.4s ease-in-out infinite`;
+  },
+  // ── Image cache — localStorage-backed, blockchain-agnostic ───────────────────
+  _loadCachedImg(url) {
+    if (!url) return Promise.resolve(null);
+    if (this._imgCache[url]) return Promise.resolve(this._imgCache[url]);
+    if (typeof _nftImgPrewarm !== 'undefined' && _nftImgPrewarm[url]) {
+      this._imgCache[url] = _nftImgPrewarm[url]; return Promise.resolve(this._imgCache[url]);
+    }
+    // Route remote/IPFS images through our same-origin proxy so bg removal (canvas
+    // pixel access) works — direct loads fail CORS on most NFT gateways.
+    const isRemote = /^(https?:|ipfs:|ar:)/i.test(url);
+    const loadUrl  = isRemote ? ('/nftimg?url=' + encodeURIComponent(url)) : url;
+    return new Promise(res => {
+      const img = new Image(); img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        this._imgCache[url] = img;
+        try {
+          const store = JSON.parse(localStorage.getItem('choctotv_nft_imgs') || '{}');
+          store[url] = Date.now();
+          for (const k of Object.keys(store)) if (store[k] < Date.now()-7*86400000) delete store[k];
+          localStorage.setItem('choctotv_nft_imgs', JSON.stringify(store));
+        } catch {}
+        res(img);
+      };
+      img.onerror = () => { console.warn('[Yard] NFT image failed to load:', url); res(null); };
+      img.src = loadUrl;
+    });
+  },
+
+  // ── Background removal — async, cached per URL, never blocks main thread ──────
+  // Uses requestIdleCallback so pixel processing runs in browser idle time.
+  // Result cached forever so each NFT image is only processed once.
+  _bgCache: new Map(),  // url → Promise<processedDataURL|null>
+
+  _removeBgAsync(imgEl, url, num = null, tolerance = 38) {
+    if (this._bgCache.has(url)) return this._bgCache.get(url);
+    const p = new Promise(resolve => {
+      // 1. If a saved <num>_nobg.png already exists on the server, use it (no reprocessing)
+      const tryCached = () => {
+        if (!num) { run(); return; }
+        const cImg = new Image();
+        cImg.onload = () => resolve(`/nobg/${num}_nobg.png`);
+        cImg.onerror = () => run();   // not saved yet → process now
+        cImg.src = `/nobg/${num}_nobg.png`;
+      };
+      const run = () => {
+        try {
+          const W = imgEl.naturalWidth || imgEl.width || 512;
+          const H = imgEl.naturalHeight || imgEl.height || 512;
+          // Work on a smaller copy to reduce pixel count (max 256px)
+          const scale = Math.min(1, 256 / Math.max(W, H));
+          const sw = Math.round(W * scale), sh = Math.round(H * scale);
+          const cv  = document.createElement('canvas');
+          cv.width  = sw; cv.height = sh;
+          const ctx = cv.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(imgEl, 0, 0, sw, sh);
+          const data = ctx.getImageData(0, 0, sw, sh);
+          const d    = data.data;
+          const idx  = (x,y) => (y*sw+x)*4;
+          const diff = (i1, i2) => Math.abs(d[i1]-d[i2]) + Math.abs(d[i1+1]-d[i2+1]) + Math.abs(d[i1+2]-d[i2+2]);
+          // Sample 4 corners as background candidates
+          const corners = [idx(1,1), idx(sw-2,1), idx(1,sh-2), idx(sw-2,sh-2)];
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i+3] < 10 || corners.some(c => diff(i,c) < tolerance)) d[i+3] = 0;
+          }
+          ctx.putImageData(data, 0, 0);
+          const out = cv.toDataURL('image/png');
+          // Persist a copy as <num>_nobg.png so it survives + skips future reprocessing
+          if (num) {
+            try {
+              fetch('/savenobg', { method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ num, dataUrl: out }) }).catch(()=>{});
+            } catch {}
+          }
+          resolve(out);
+        } catch { resolve(null); }
+      };
+      // Use idle callback so it never blocks animation frames
+      if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(tryCached, { timeout: 2000 });
+      } else {
+        setTimeout(tryCached, 50);
+      }
+    });
+    this._bgCache.set(url, p);
+    return p;
+  },
+
+
+  _resolveSprite(pupIdOrName){
+    // Prefer name-based lookup (exact PNG file match) sent by server
+    const byName = (pupIdOrName && typeof pupIdOrName==='string' && this.getSpriteByName)
+      ? this.getSpriteByName(pupIdOrName) : null;
+    const s = byName
+      || (pupIdOrName && this.getSpriteByPupId && this.getSpriteByPupId(pupIdOrName))
+      || (this.getRandomSprite && this.getRandomSprite())
+      || null;
+    if(!s) console.warn('[Yard] _resolveSprite null for',pupIdOrName);
+    return s;
+  },
+  // Resolve the ONE pup shown in both animation and popup so they always match.
+  //  • Fav pup set  → animation uses background-REMOVED image, popup uses original (with bg)
+  //  • No fav pup   → random sprite (already transparent) used for both
+  // Returns { animImg, popupImg, pupName, rarity } — animImg/popupImg are <img> elements (or null).
+  async _resolveHeroImages(msg, sprite){
+    const pupName = msg.pupName || sprite?.name || 'Pup';
+    const rarity  = (msg.rarity || sprite?.rarity || 'common').toLowerCase();
+    if (msg.pcImageURL) {
+      let orig = null;
+      try { orig = await this._loadCachedImg(msg.pcImageURL); } catch {}
+      if (orig) {
+        let animImg = orig; // animation: background removed
+        try {
+          const noBgSrc = await this._removeBgAsync(orig, msg.pcImageURL, msg.favPup?.num || null);
+          if (noBgSrc) { const i = new Image(); i.src = noBgSrc; try { await i.decode(); } catch {} animImg = i; }
+        } catch {}
+        return { animImg, popupImg: orig, pupName, rarity }; // popup: original WITH bg
+      }
+      console.warn('[Yard] Fav pup image failed to load, using sprite fallback:', msg.pcImageURL);
+    }
+    // No fav (or fav failed) → random sprite, same transparent image for both
+    let simg = null;
+    try { simg = sprite ? await this.getImageForSprite(sprite) : null; } catch {}
+    if (!simg && sprite) console.warn('[Yard] Sprite image failed to load:', sprite.name);
+    return { animImg: simg, popupImg: simg, pupName, rarity };
+  },
+
+  // ── Fav pup image loader — memory cache + localStorage URL persistence ───────
+  // ── Sky effect manager — guarded rAF to prevent stacked loops ──────────────
+  // ── Sparkle CSS animation injected onto a pup element ────────────────────
   // ── TOSS — stick arcs across yard, pup slides to it and back ─────────────────
-  async _doToss(sprite,msg){
+  async _doToss(sprite,msg,hero){
     const{grassY}=this.CONFIG.layout;
-    const sz=180, img=sprite?await this.getImageForSprite(sprite):null;
+    const sz=180, img=hero.animImg;
     const startX=rand(140,480), startY=grassY+85;
     const el=this._mkPupEl(img,'',startX-sz/2,startY-sz,sz,sz);
-    const lb=this._mkLbl(msg.user,startX,startY-sz-8);
+    const lb=this._mkLbl(msg.user,hero.pupName,startX,startY-sz-8);
     this.spriteLayer.append(el,lb);
 
     const proj={type:'stick',x:startX+sz*.35,y:startY-sz*.5,
@@ -709,17 +1096,17 @@ const Yard = {
 
     el.remove();lb.remove();
     this._floatReward(startX, startY - sz - 20, msg.reward);
-    await this._showPopup({title:GAME_LABEL.toss,user:msg.user,reward:msg.reward,balance:msg.balance,sprite});
+    await this._showPopup({title:GAME_LABEL.toss,user:msg.user,reward:msg.reward,balance:msg.balance,imgEl:hero.popupImg,pupName:hero.pupName,rarityColor:RARITY_COL[hero.rarity]});
     await delay(2500);this._clearPopup();
   },
 
   // ── THROW — ball arcs across yard, pup slides to it and back ─────────────────
-  async _doThrow(sprite,msg){
+  async _doThrow(sprite,msg,hero){
     const{grassY}=this.CONFIG.layout;
-    const sz=180, img=sprite?await this.getImageForSprite(sprite):null;
+    const sz=180, img=hero.animImg;
     const startX=rand(100,380), startY=grassY+85;
     const el=this._mkPupEl(img,'',startX-sz/2,startY-sz,sz,sz);
-    const lb=this._mkLbl(msg.user,startX,startY-sz-8);
+    const lb=this._mkLbl(msg.user,hero.pupName,startX,startY-sz-8);
     this.spriteLayer.append(el,lb);
 
     const proj={type:'ball',x:startX+sz*.4,y:startY-sz*.55,
@@ -736,20 +1123,20 @@ const Yard = {
 
     el.remove();lb.remove();
     this._floatReward(startX, startY - sz - 20, msg.reward);
-    await this._showPopup({title:GAME_LABEL.throw,user:msg.user,reward:msg.reward,balance:msg.balance,sprite});
+    await this._showPopup({title:GAME_LABEL.throw,user:msg.user,reward:msg.reward,balance:msg.balance,imgEl:hero.popupImg,pupName:hero.pupName,rarityColor:RARITY_COL[hero.rarity]});
     await delay(2500);this._clearPopup();
   },
 
   // ── DIG — pup wiggles, dirt flies, leaves a persistent hole ──────────────────
-  async _doDig(sprite,msg){
+  async _doDig(sprite,msg,hero){
     const{grassY}=this.CONFIG.layout;
-    const sz=180, img=sprite?await this.getImageForSprite(sprite):null;
+    const sz=180, img=hero.animImg;
     const x=this._rndX(), py=grassY+42;
     const feetX=x+sz/2, feetY=py+sz-8;
     const el=this._mkPupEl(img,'',x,py,sz,sz);
     el.style.animation='yDig .8s ease-in-out infinite';
     el.style.transformOrigin='bottom center';
-    const lb=this._mkLbl(msg.user,x+sz/2,py-8);
+    const lb=this._mkLbl(msg.user,hero.pupName,x+sz/2,py-8);
     this.spriteLayer.append(el,lb);
 
     let digging=true;
@@ -761,12 +1148,28 @@ const Yard = {
     this._addHole(feetX,feetY+10);
     el.remove();lb.remove();
     this._floatReward(feetX, py - 30, msg.reward);
-    await this._showPopup({title:GAME_LABEL.dig,user:msg.user,reward:msg.reward,balance:msg.balance,sprite});
+    await this._showPopup({title:GAME_LABEL.dig,user:msg.user,reward:msg.reward,balance:msg.balance,imgEl:hero.popupImg,pupName:hero.pupName,rarityColor:RARITY_COL[hero.rarity]});
     await delay(2500);this._clearPopup();
   },
 
   // ── FISH — emoji bounces → rarity wiggle → pup PNG rises ─────────────────────
-  async _doFish(msg){
+  async _doFish(msg,hero){
+    // Fish CATCHES a pup. Priority: caught player's fav → own fav (hero) → random sprite.
+    let imgOverride = hero?.animImg || null;          // animation image (bg-removed)
+    let popupOverride = hero?.popupImg || null;        // popup image (with bg)
+    let caughtName  = (msg.pcImageURL ? hero?.pupName : null) || null;
+    if (msg.fishCatchFav?.imageUrl) {
+      try {
+        const caughtImg = await this._loadCachedImg(msg.fishCatchFav.imageUrl);
+        if (caughtImg) {
+          popupOverride = caughtImg;
+          caughtName = msg.fishCatchFav.name || caughtName;
+          let anim = caughtImg;
+          try { const nb = await this._removeBgAsync(caughtImg, msg.fishCatchFav.imageUrl, msg.fishCatchFav.num || null); if (nb){const i=new Image();i.src=nb;try{await i.decode();}catch{}anim=i;} } catch {}
+          imgOverride = anim;
+        }
+      } catch {}
+    }
     const{pondX,pondY}=this.CONFIG.layout;
     const r=(msg.rarity||rngRarity()).toLowerCase();
 
@@ -774,7 +1177,7 @@ const Yard = {
     emo.style.cssText=`position:absolute;left:${pondX-50}px;top:${pondY-210}px;font-size:105px;line-height:1;animation:yFishBounce 1.2s ease-in-out infinite;transform-origin:bottom center;user-select:none;`;
     emo.textContent='🎣';
     this.spriteLayer.appendChild(emo);
-    const lb=this._mkLbl(msg.user,pondX,pondY-180);
+    const lb=this._mkLbl(msg.user,caughtName,pondX,pondY-180);
     this.spriteLayer.appendChild(lb);
 
     // Bouncing phase
@@ -813,22 +1216,30 @@ const Yard = {
     // Use the specific pup companion.js picked (so chat + overlay match), fallback to random
     const catchSprite=(msg.catchPupId!=null&&this.getSpriteByPupId&&this.getSpriteByPupId(msg.catchPupId))
       ||(this.getRandomSprite&&(this.getRandomSprite(r)||this.getRandomSprite()))||null;
-    const catchImg=catchSprite?await this.getImageForSprite(catchSprite):null;
-    const csz=160;
+    // Animation image: fav/caught (bg-removed) or the random catch sprite (already transparent)
+    const catchImg   = imgOverride   || (catchSprite ? await this.getImageForSprite(catchSprite) : null);
+    const catchPopup = popupOverride || catchImg;  // popup keeps background
+    const finalName  = caughtName || catchSprite?.name || 'Pup';
+    const csz = 160;
 
-    if(catchImg){
-      const cel=document.createElement('img');cel.src=catchImg.src;
-      cel.style.cssText=`position:absolute;left:${pondX-csz/2}px;top:${pondY-csz-10}px;width:${csz}px;height:${csz}px;image-rendering:pixelated;animation:yCatch 1.0s cubic-bezier(.34,1.56,.64,1) both;`;
+    if (catchImg) {
+      const cel = document.createElement('img');
+      cel.src = catchImg.src || catchImg;
+      cel.style.cssText = `position:absolute;left:${pondX-csz/2}px;top:${pondY-csz-10}px;width:${csz}px;height:${csz}px;image-rendering:auto;animation:yCatch 1.0s cubic-bezier(.34,1.56,.64,1) both;`;
       this.spriteLayer.appendChild(cel);
-      const clb=this._mkLbl(msg.user,pondX,pondY-csz-18);this.spriteLayer.appendChild(clb);
+      const clb = this._mkLbl(msg.user, finalName, pondX, pondY - csz - 18);
+      this.spriteLayer.appendChild(clb);
       this._floatReward(pondX, pondY - csz - 30, msg.reward);
-      await this._showPopup({title:`🎣 ${cap(r)} Catch!`,subtitle:catchSprite?catchSprite.name+' appeared!':'Something splashed!',
-        user:msg.user,reward:msg.reward,balance:msg.balance,sprite:catchSprite,rarityColor:RARITY_COL[r]});
-      await delay(2500);cel.remove();clb.remove();this._clearPopup();
+      await this._showPopup({
+        title: `🎣 ${cap(r)} Catch!`,
+        user: msg.user, reward: msg.reward, balance: msg.balance,
+        imgEl: catchPopup, pupName: finalName, rarityColor: RARITY_COL[r],
+      });
+      await delay(2500); cel.remove(); clb.remove(); this._clearPopup();
     } else {
       this._floatReward(pondX, pondY - 200, msg.reward);
-      await this._showPopup({title:GAME_LABEL.fish,user:msg.user,reward:msg.reward,balance:msg.balance});
-      await delay(2500);this._clearPopup();
+      await this._showPopup({ title: GAME_LABEL.fish, user: msg.user, reward: msg.reward, balance: msg.balance });
+      await delay(2500); this._clearPopup();
     }
   },
 
@@ -840,19 +1251,64 @@ const Yard = {
   },
   async _spawnWalker(msg){
     this.walkBlocked.add(msg.user);
-    const sprite=this._resolveSprite(msg.pupId);
-    const img=sprite?await this.getImageForSprite(sprite):null;
+
+    const fav    = msg.favPup; // set if user ran !setfav
+    const hasFav = fav && (fav.imageUrl || fav.background || fav.diamonds);
+
+    // Image — use NFT if available, else resolve random sprite as always
+    let img = null, sprite = null;
+    if (hasFav && fav.imageUrl) {
+      img = await this._loadCachedImg(fav.imageUrl);
+    }
+    if (!img) {
+      sprite = this._resolveSprite(msg.pupId);
+      img    = sprite ? await this.getImageForSprite(sprite) : null;
+    }
+
+    // pcSky / dcol — fav pup sky config and diamond sparkle color
+    const pcSky = hasFav ? (fav.pcSkyConfig || null) : null;
+    const dcol  = pcSky?.diamonds?.color || pcSky?.fenceColor || null;
+    // Apply sky + fence effects for this user's fav pup walk
+    if (hasFav) this._setSkyCfg(fav.pcSkyConfig);
+    // Set fence glow color (diamond trait) — was computed but never applied
+    if (dcol) { this._fenceColor = dcol; this._drawNeeded = true; }
+
+    // Background removal — start async processing, walker shows original meanwhile.
+    // When done, the walker's <img> src is swapped in-place (no freeze).
+    let bgPromise = null;
+    const favUrl  = fav?.imageUrl || null;
+    if (img && hasFav && favUrl) {
+      bgPromise = this._removeBgAsync(img, favUrl, fav?.num || null);
+    }
     const sz=130;
     const wrap=document.createElement('div');wrap.style.cssText=`position:absolute;width:${sz}px;height:${sz}px;`;
     const inner=document.createElement(img?'img':'div');
-    if(img){inner.src=img.src;inner.style.cssText='width:100%;height:100%;image-rendering:pixelated;';}
+    if(img){inner.src=img.src||img;inner.style.cssText='width:100%;height:100%;image-rendering:pixelated;';}
     else{inner.style.cssText=`width:100%;height:100%;background:${RARITY_COL[(sprite?.rarity||'common').toLowerCase()]||'#4ecdc4'};border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:54px;`;inner.textContent='🐾';}
     inner.style.animation='yWalk .48s ease-in-out infinite';
+    if (dcol) this._addSparkle(inner, dcol);
     wrap.appendChild(inner);this.spriteLayer.appendChild(wrap);
-    const lb=document.createElement('div');lb.className='yUser';lb.textContent='@'+msg.user;lb.style.animation='none';
+
+    const lb=document.createElement('div');lb.className='yUser';
+    const _wPup = msg.pupName || sprite?.name || null;
+    lb.textContent = _wPup ? `@${msg.user} (${_wPup})` : ('@'+msg.user);
+    lb.style.animation='none';
     this.spriteLayer.appendChild(lb);
+
     const startOffset=this.walkers.length*(Math.floor(this.walkPath.length/(MAX_WALKERS)));
-    this.walkers.push({user:msg.user,wrap,inner,lb,sz,msg,sprite,pathIdx:startOffset,totalSteps:0,done:false,totalPath:this.walkPath.length});
+    const walkerEntry = {user:msg.user,wrap,inner,lb,sz,msg,sprite,popupImg:(hasFav&&fav.imageUrl)?img:null,pupName:(msg.pupName||sprite?.name||null),pathIdx:startOffset,totalSteps:0,done:false,totalPath:this.walkPath.length,hasPcSky:!!pcSky,_dcol:dcol||null};
+    this.walkers.push(walkerEntry);
+    if (dcol) { this._walkerColors.push(dcol); this._updateFenceCycle(); }
+    // Swap to bg-removed image when idle processing completes
+    // Preserve original (with-bg) image for the popup, then swap the walking sprite to bg-removed
+    if (img && (hasFav && fav.imageUrl)) {
+      const orig = new Image(); orig.src = img.src || img; walkerEntry.popupImg = orig;
+    }
+    if (bgPromise && inner.tagName === 'IMG') {
+      bgPromise.then(noBg => {
+        if (noBg && !walkerEntry.done) inner.src = noBg;
+      }).catch(()=>{});
+    }
   },
   _tickWalkers(dt){
     if (this.queuesHeld) return; // paused during rescue
@@ -874,7 +1330,7 @@ const Yard = {
       const flip=nt.x<pt.x;
       w.wrap.style.left=`${px-w.sz/2}px`;w.wrap.style.top=`${py-w.sz+bob}px`;
       w.wrap.style.transform=`scale(${scale})`;w.inner.style.transform=flip?'scaleX(-1)':'scaleX(1)';
-      w.lb.style.left=`${px}px`;w.lb.style.top=`${py-w.sz*scale-18}px`;
+      w.lb.style.left=`${px}px`;w.lb.style.top=`${Math.round(py - w.sz + w.sz*(1-scale)/2 - 24)}px`;
     });
     // Check all walkers for hole collision — only while queues not held
     if (!this.pupInHole) {
@@ -896,12 +1352,17 @@ const Yard = {
       }
     }
 
-    done.forEach(w=>{
+    done.forEach(async w=>{
       w.wrap.remove();w.lb.remove();
       this.walkers=this.walkers.filter(x=>x!==w);
       this.walkBlocked.delete(w.user);
+      if (w.hasPcSky) this._clearSkyCfg();
       this._floatReward(w.wrap._x||900, (this.CONFIG.layout.grassY||310) - 40, w.msg.reward);
-      this._showPopup({title:GAME_LABEL.walk,user:w.msg.user,reward:w.msg.reward,balance:w.msg.balance,sprite:w.sprite});
+      {
+        let _popImg = w.popupImg;
+        if (!_popImg && w.sprite) { try { _popImg = await this.getImageForSprite(w.sprite); } catch {} }
+        this._showPopup({title:GAME_LABEL.walk,user:w.msg.user,reward:w.msg.reward,balance:w.msg.balance,imgEl:_popImg,pupName:w.pupName,rarityColor:RARITY_COL[(w.msg.rarity||w.sprite?.rarity||'common').toLowerCase()]});
+      }
       setTimeout(()=>this._clearPopup(),2500);
       if(this.walkQ.length)this._spawnWalker(this.walkQ.shift());
     });
@@ -1027,16 +1488,15 @@ const Yard = {
     setTimeout(() => el.remove(), 2900);
   },
 
-  async _showPopup({title,subtitle,user,reward,balance,sprite,rarityColor}){
+  async _showPopup({title,subtitle,user,reward,balance,imgEl,pupName,rarityColor}){
     this._clearPopup();
     const col=rarityColor||'#4ecdc4',bot=this.CONFIG.layout.popupBottom;
-    const img=sprite?await this.getImageForSprite(sprite):null;
+    const img=imgEl||null;  // popup shows the WITH-background image (fav) or sprite
     const pop=document.createElement('div');
-    pop.style.cssText=`position:absolute;bottom:${bot}px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,rgba(5,5,15,.97),rgba(15,15,35,.99));border:2px solid ${col};border-radius:18px;padding:22px 36px;display:flex;align-items:center;gap:18px;min-width:580px;max-width:1000px;box-shadow:0 0 50px ${col}55,0 8px 32px rgba(0,0,0,.7);animation:yPin .3s cubic-bezier(.34,1.56,.64,1) both;`;
-    if(img){const th=document.createElement('img');th.src=img.src;th.style.cssText='width:96px;height:96px;image-rendering:pixelated;border-radius:10px;flex-shrink:0;';pop.appendChild(th);}
-    else if(sprite){const th=document.createElement('div');th.style.cssText=`width:96px;height:96px;border-radius:10px;flex-shrink:0;background:${col};display:flex;align-items:center;justify-content:center;font-size:52px;`;th.textContent='🐾';pop.appendChild(th);}
+    pop.style.cssText=`position:absolute;bottom:${bot}px;right:calc(50% + 155px);background:linear-gradient(135deg,rgba(5,5,15,.97),rgba(15,15,35,.99));border:2px solid ${col};border-radius:18px;padding:22px 36px;display:flex;align-items:center;gap:18px;min-width:320px;max-width:460px;box-shadow:0 0 50px ${col}55,0 8px 32px rgba(0,0,0,.7);animation:yPin .3s cubic-bezier(.34,1.56,.64,1) both;`;
+    if(img){const th=document.createElement('img');th.src=img.src||img;th.style.cssText='width:104px;height:104px;border-radius:10px;flex-shrink:0;object-fit:cover;border:1px solid '+col+'55;';pop.appendChild(th);}
     const txt=document.createElement('div');txt.style.cssText='flex:1;min-width:0;';
-    txt.innerHTML=`<div style="font-size:30px;font-weight:700;color:${col};text-shadow:0 0 14px ${col}66;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>${subtitle?`<div style="font-size:18px;color:#999;margin-top:2px;">${subtitle}</div>`:''}${user?`<div style="font-size:24px;color:#eee;margin-top:6px;">@${user}</div>`:''}${reward?`<div style="font-size:20px;color:#ffd700;margin-top:4px;">+${reward} Choctobits${balance!=null?` <span style="color:#888;font-size:17px;">· bal: ${balance}</span>`:''}</div>`:''}`;
+    txt.innerHTML=`<div style="font-size:30px;font-weight:700;color:${col};text-shadow:0 0 14px ${col}66;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>${subtitle?`<div style="font-size:18px;color:#999;margin-top:2px;">${subtitle}</div>`:''}${(user||pupName)?`<div style="font-size:24px;color:#eee;margin-top:6px;">${user?'@'+user:''}${pupName?` <span style="color:${col};">(${pupName})</span>`:''}</div>`:''}${reward?`<div style="font-size:20px;color:#ffd700;margin-top:4px;">+${reward} Choctobits${balance!=null?` <span style="color:#888;font-size:17px;">· bal: ${balance}</span>`:''}</div>`:''}`;
     pop.appendChild(txt);this.popupLayer.appendChild(pop);this.popup=pop;return pop;
   },
   _clearPopup(){if(!this.popup)return;const el=this.popup;this.popup=null;el.style.animation='yPout .25s ease forwards';setTimeout(()=>el.remove(),280);},
@@ -1048,7 +1508,7 @@ const Yard = {
     el.style.cssText=(el.style.cssText||'')+`;position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;image-rendering:pixelated;`;
     return el;
   },
-  _mkLbl(user,cx,cy){const d=document.createElement('div');d.className='yUser';d.textContent='@'+user;d.style.left=`${cx}px`;d.style.top=`${cy}px`;return d;},
+  _mkLbl(user,pupName,cx,cy){const d=document.createElement('div');d.className='yUser';d.textContent=pupName?`@${user} (${pupName})`:('@'+user);d.style.left=`${cx}px`;d.style.top=`${cy}px`;return d;},
   _clearAll(){
     this.particles=[];this.projectiles=[];this.movers=[];
     this.walkers.forEach(w=>{try{w.wrap.remove();w.lb.remove();}catch{}});

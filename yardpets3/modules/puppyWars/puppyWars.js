@@ -51,15 +51,70 @@ const PuppyWars = {
         @keyframes pwIn  {from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
         @keyframes pwOut {to{opacity:0;transform:translateY(20px)}}
         .pw-bar{transition:width .4s ease,background .4s;}
+        /* ── Duel (1v1) crash animation ── */
+        @keyframes pwChargeR{0%{transform:translateX(0)}45%{transform:translateX(220px) rotate(8deg)}55%{transform:translateX(200px)}100%{transform:translateX(0)}}
+        @keyframes pwChargeL{0%{transform:translateX(0) scaleX(-1)}45%{transform:translateX(-220px) rotate(-8deg) scaleX(-1)}55%{transform:translateX(-200px) scaleX(-1)}100%{transform:translateX(0) scaleX(-1)}}
+        @keyframes pwHit{0%,100%{transform:translateX(0)}20%{transform:translateX(14px)}40%{transform:translateX(-10px)}60%{transform:translateX(7px)}80%{transform:translateX(-4px)}}
+        @keyframes pwFlash{0%,100%{filter:none}30%{filter:brightness(2.2) sepia(1) hue-rotate(-25deg) saturate(6)}}
+        @keyframes pwFlyR{0%{transform:translateX(0) rotate(0);opacity:1}100%{transform:translateX(1400px) rotate(900deg);opacity:0}}
+        @keyframes pwFlyL{0%{transform:translateX(0) rotate(0) scaleX(-1);opacity:1}100%{transform:translateX(-1400px) rotate(-900deg) scaleX(-1);opacity:0}}
+        .pw-duelist{position:absolute;bottom:30px;width:150px;height:150px;transition:none;}
+        .pw-duelist.left{left:18%;}
+        .pw-duelist.right{right:18%;}
+        .pw-duelist img{width:100%;height:100%;object-fit:contain;image-rendering:auto;}
+        .pw-charge-r{animation:pwChargeR .8s ease-in-out;}
+        .pw-charge-l{animation:pwChargeL .8s ease-in-out;}
+        .pw-hit{animation:pwHit .5s ease, pwFlash .5s ease;}
+        .pw-fly-r{animation:pwFlyR 1s cubic-bezier(.4,0,.9,.5) forwards;}
+        .pw-fly-l{animation:pwFlyL 1s cubic-bezier(.4,0,.9,.5) forwards;}
+        .pw-duel-hp{position:absolute;top:-22px;left:50%;transform:translateX(-50%);width:140px;height:12px;background:rgba(0,0,0,.6);border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.25);}
+        .pw-duel-name{position:absolute;top:-40px;left:50%;transform:translateX(-50%);font-size:14px;font-weight:800;color:#fff;white-space:nowrap;text-shadow:0 1px 3px #000;}
+        .pw-vs{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);font-size:44px;font-weight:900;color:#f39c12;text-shadow:0 2px 8px #000;z-index:5;}
       `;
       document.head.appendChild(s);
     }
     this.container = document.createElement('div');
-    this.container.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:220px;display:none;background:rgba(0,0,0,.9);border-top:2px solid rgba(255,255,255,.14);';
+    this.container.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:220px;background:rgba(0,0,0,.9);border-top:2px solid rgba(255,255,255,.14);overflow:hidden;';
     this.arenaEl = document.createElement('div');
-    this.arenaEl.style.cssText = 'height:100%;';
+    this.arenaEl.style.cssText = 'height:100%;display:none;';
     this.container.appendChild(this.arenaEl);
+
+    this.arenaEl = document.createElement('div');
+    this.arenaEl.style.cssText = 'height:100%;display:none;';
+    this.container.appendChild(this.arenaEl);
+
+    // Idle panel — NFT Adoption Classifieds from Magic Eden
+    // Replaces the previous iframe scroll panel. Shows 3 Choctonaut NFTs at a time
+    // as a "pet adoption" feed. Data fetched from /classifieds endpoint.
+    this.idleEl = document.createElement('div');
+    this.idleEl.style.cssText = 'position:absolute;inset:0;overflow:hidden;background:#f2ead8;display:flex;flex-direction:column;justify-content:flex-end;';
+    this.idleEl.style.contain = 'strict';
+    this.idleEl.innerHTML = '';
+    const npWrap = document.createElement('div');
+    npWrap.className = 'np-wrap';
+    npWrap.innerHTML = `
+      <div class="np-banner">
+        <span class="np-title">The Choctonaut Chronicle</span>
+        <span class="np-rule">★ Adoption Classifieds ★ Pups Seeking Good Homes ★</span>
+        <span class="np-date" id="__npDate"></span>
+      </div>
+      <div class="np-track"><div class="np-inner" id="__npInner"></div></div>
+    `;
+    this.idleEl.appendChild(npWrap);
+    // Live date in header
+    const npDate = npWrap.querySelector('#__npDate');
+    if (npDate) npDate.textContent = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+
     this.mount.appendChild(this.container);
+    // Start in idle/classifieds mode — battle takes over when one starts
+    this._setActive(false);
+  },
+
+  // Switch container between idle (web scroll) and active (battle/queue/leaderboard)
+  _setActive(active) {
+    this.arenaEl.style.display = active ? 'block' : 'none';
+    // Show/hide the whole battle-mount panel
+    this.mount.style.display  = active ? 'block' : 'none';
   },
 
   _enqueue(msg) {
@@ -112,7 +167,7 @@ const PuppyWars = {
 
   _renderLeaderboard() {
     if (this.battle || this.queue.length || !this._leaderboard?.length) return;
-    this.container.style.display   = 'block';
+    this._setActive(true);
     this.container.style.animation = '';
     const medals = ['🥇','🥈','🥉'];
     this.arenaEl.innerHTML = `
@@ -160,7 +215,7 @@ const PuppyWars = {
   },
 
   _renderLobby() {
-    this.container.style.display   = 'block';
+    this._setActive(true);
     this.container.style.animation = 'pwIn .35s ease both';
     this._updateLobby();
   },
@@ -248,8 +303,8 @@ const PuppyWars = {
       const img    = sprite && this.getImageForSprite ? await this.getImageForSprite(sprite) : null;
       return { user:e.user, sprite, rarity, img, hp:base.hp, max:base.hp, alive:true, attacking:false };
     }));
-    this.battle = { fighters, round:0, log:[] };
-    this.container.style.display = 'block';
+    this.battle = { fighters, round:0, log:[], isGauntlet:false, _duelBuilt:false };
+    this._setActive(true);
     this.container.style.animation = 'pwIn .35s ease both';
     this._render();
     await delay(1500);
@@ -271,6 +326,7 @@ const PuppyWars = {
       const crit = dmg >= s.dmax * 0.9;
       def.hp     = Math.max(0, def.hp - dmg);
       atk.attacking = true;
+      b._lastAtk = atk; b._lastDef = def;  // for duel crash animation
 
       if (def.hp <= 0) {
         def.alive = false;
@@ -295,7 +351,7 @@ const PuppyWars = {
 
     this.container.style.animation = 'pwOut .4s ease forwards';
     await delay(400);
-    this.container.style.display = 'none';
+    this._setActive(false);
     this.container.style.animation = '';
     this.battle = null; this._used.clear();
 
@@ -330,14 +386,37 @@ const PuppyWars = {
       alive:  true,
     };
 
-    // Build opponent pool — all pups except player's pup, shuffled
-    const all       = this.getSprites ? this.getSprites() : [];
-    const opponents = all
-      .filter(s => s.name !== playerSprite?.name)
-      .sort(() => Math.random() - 0.5);
+    // Build opponent pool with difficulty ramping:
+    //   Round 1-2:  guaranteed common (warm-up, never a round 1 loss)
+    //   Round 3-4:  common + uncommon
+    //   Round 5-6:  uncommon + rare
+    //   Round 7-8:  rare + epic
+    //   Round 9+:   epic + legendary (true endgame)
+    // Players should clear 3-5 rounds on average.
+    const all = this.getSprites ? this.getSprites() : [];
+    const byRarity = { common:[], uncommon:[], rare:[], epic:[], legendary:[] };
+    for (const s of all) {
+      if (s.name === playerSprite?.name) continue;
+      const r = (s.rarity || 'common').toLowerCase();
+      if (byRarity[r]) byRarity[r].push(s);
+    }
+    const shuffle = arr => arr.slice().sort(() => Math.random() - 0.5);
+
+    // Build a difficulty-tiered queue. Each tier has 2 rounds.
+    const ladder = [
+      ...shuffle(byRarity.common).slice(0, 2),                                   // 1-2: common only
+      ...shuffle([...byRarity.common, ...byRarity.uncommon]).slice(0, 2),        // 3-4: common + uncommon
+      ...shuffle([...byRarity.uncommon, ...byRarity.rare]).slice(0, 2),          // 5-6: uncommon + rare
+      ...shuffle([...byRarity.rare, ...byRarity.epic]).slice(0, 2),              // 7-8: rare + epic
+      ...shuffle([...byRarity.epic, ...byRarity.legendary]),                     // 9+:  epic + legendary, all remaining
+    ];
+    // Fill out the rest if any pups left (mostly legendaries that didn't fit)
+    const usedNames = new Set(ladder.map(s => s.name));
+    const remaining = all.filter(s => s.name !== playerSprite?.name && !usedNames.has(s.name));
+    const opponents = [...ladder, ...shuffle(remaining)];
 
     this.battle = { fighters:[player], round:0, log:[], gauntlet:true, wins:0, total:opponents.length };
-    this.container.style.display    = 'block';
+    this._setActive(true);
     this.container.style.animation  = 'pwIn .35s ease both';
 
     let totalWins = 0;
@@ -378,13 +457,15 @@ const PuppyWars = {
         const pd  = Math.floor(Math.random()*(ps.dmax-ps.dmin+1))+ps.dmin;
         opp.hp    = Math.max(0, opp.hp - pd);
         this.battle.log = [`⚔️ @${player.user} hits ${opp.user} for ${pd}!`];
-        if (opp.hp <= 0) { playerWon = true; break; }
+        this.battle._gAtk = 'player';
+        if (opp.hp <= 0) { playerWon = true; this._renderGauntlet(); await delay(900); break; }
 
         // Opponent counter-attacks
         const os  = st(opp.rarity);
         const od  = Math.floor(Math.random()*(os.dmax-os.dmin+1))+os.dmin;
         player.hp = Math.max(0, player.hp - od);
         this.battle.log.push(`${opp.user} hits back for ${od}!`);
+        this.battle._gAtk = 'opp';
 
         this.battle.round++;
         this._renderGauntlet();
@@ -419,7 +500,7 @@ const PuppyWars = {
 
     this.container.style.animation = 'pwOut .4s ease forwards';
     await delay(400);
-    this.container.style.display  = 'none';
+    this._setActive(false);
     this.container.style.animation = '';
     this.battle = null; this._used.clear();
 
@@ -502,19 +583,85 @@ const PuppyWars = {
       </div>`;
 
     requestAnimationFrame(() => {
-      if (player.img) {
-        const cv = document.getElementById('gq-player');
-        if (cv) { const ctx=cv.getContext('2d'); ctx.clearRect(0,0,sp,sp); ctx.drawImage(player.img,0,0,sp,sp); }
+      const pcv = document.getElementById('gq-player');
+      const ocv = document.getElementById('gq-opp');
+      if (player.img && pcv) { const ctx=pcv.getContext('2d'); ctx.clearRect(0,0,sp,sp); ctx.drawImage(player.img,0,0,sp,sp); }
+      if (opp?.img && ocv) { const ctx=ocv.getContext('2d'); ctx.save(); ctx.translate(sp,0); ctx.scale(-1,1); ctx.drawImage(opp.img,0,0,sp,sp); ctx.restore(); }
+
+      // Crash animation — attacker lunges toward the other, defender shakes
+      const atk = b._gAtk;
+      if (atk === 'player' && pcv) {
+        pcv.style.animation='none'; void pcv.offsetWidth;
+        pcv.style.animation='pwChargeR .7s ease-in-out';
+        if (ocv) setTimeout(()=>{ ocv.style.animation='pwHit .5s ease,pwFlash .5s ease'; setTimeout(()=>ocv.style.animation='',500); },300);
+      } else if (atk === 'opp' && ocv) {
+        ocv.style.animation='none'; void ocv.offsetWidth;
+        ocv.style.animation='pwChargeL .7s ease-in-out';
+        if (pcv) setTimeout(()=>{ pcv.style.animation='pwHit .5s ease,pwFlash .5s ease'; setTimeout(()=>pcv.style.animation='',500); },300);
       }
-      if (opp?.img) {
-        const cv = document.getElementById('gq-opp');
-        if (cv) { const ctx=cv.getContext('2d'); ctx.save(); ctx.translate(sp,0); ctx.scale(-1,1); ctx.drawImage(opp.img,0,0,sp,sp); ctx.restore(); }
-      }
+      // Loser flies off-screen
+      if (opp && opp.hp <= 0 && ocv) { ocv.style.animation='pwFlyR 1s cubic-bezier(.4,0,.9,.5) forwards'; }
+      if (player.hp <= 0 && pcv)     { pcv.style.animation='pwFlyL 1s cubic-bezier(.4,0,.9,.5) forwards'; }
+      b._gAtk = null;
     });
+  },
+
+  // 1v1 crash duel: fighters charge and collide; the loser flies off-screen.
+  _renderDuel() {
+    const b = this.battle; if (!b) return;
+    const [L, R] = b.fighters;
+    const lastLog = b.log.length ? b.log[b.log.length-1].replace(/<\/?b>/g,'') : '';
+
+    // Build the duel stage once
+    if (!b._duelBuilt) {
+      this.arenaEl.innerHTML = `
+        <div style="position:relative;height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif;">
+          <div style="position:absolute;top:8px;left:0;right:0;text-align:center;font-size:17px;font-weight:900;color:#f39c12;letter-spacing:1px;z-index:6;">⚔️ ${b.isGauntlet?'GAUNTLET':'DUEL'}</div>
+          <div class="pw-vs">VS</div>
+          <div class="pw-duelist left" id="pw-duel-l">
+            <div class="pw-duel-name" style="color:${rCol(L.rarity)}">@${L.user}</div>
+            <div class="pw-duel-hp"><div class="pw-bar" id="pw-hp-l" style="width:100%;height:100%;background:#2ecc71;"></div></div>
+            ${L.img ? `<img src="${L.img.src||L.img}">` : '<div style="font-size:90px;text-align:center;">🐶</div>'}
+          </div>
+          <div class="pw-duelist right" id="pw-duel-r">
+            <div class="pw-duel-name" style="color:${rCol(R.rarity)}">@${R.user}</div>
+            <div class="pw-duel-hp"><div class="pw-bar" id="pw-hp-r" style="width:100%;height:100%;background:#2ecc71;"></div></div>
+            ${R.img ? `<img src="${R.img.src||R.img}">` : '<div style="font-size:90px;text-align:center;transform:scaleX(-1);">🐶</div>'}
+          </div>
+          <div style="position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:13px;color:#ccc;padding:0 10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="pw-duel-log">${lastLog}</div>
+        </div>`;
+      b._duelBuilt = true;
+      b._lDead = b._rDead = false;
+    }
+
+    // Update HP bars
+    const lEl = document.getElementById('pw-duel-l'), rEl = document.getElementById('pw-duel-r');
+    const lHp = document.getElementById('pw-hp-l'),   rHp = document.getElementById('pw-hp-r');
+    const log = document.getElementById('pw-duel-log');
+    if (log) log.textContent = lastLog;
+    if (lHp) { const p=hpPct(L); lHp.style.width=p+'%'; lHp.style.background=hpCol(p); }
+    if (rHp) { const p=hpPct(R); rHp.style.width=p+'%'; rHp.style.background=hpCol(p); }
+
+    // Charge/hit animation — figure out who attacked this round
+    const atk = b._lastAtk, def = b._lastDef;
+    if (atk && def && lEl && rEl) {
+      const atkEl = atk===L ? lEl : rEl;
+      const defEl = def===L ? lEl : rEl;
+      const chargeCls = atk===L ? 'pw-charge-r' : 'pw-charge-l';
+      atkEl.classList.remove('pw-charge-r','pw-charge-l'); void atkEl.offsetWidth;
+      atkEl.classList.add(chargeCls);
+      setTimeout(()=>{ defEl.classList.add('pw-hit'); setTimeout(()=>defEl.classList.remove('pw-hit'),500); }, 320);
+      setTimeout(()=>atkEl.classList.remove(chargeCls), 800);
+    }
+
+    // Fly-off on elimination
+    if (!L.alive && !b._lDead && lEl) { b._lDead=true; lEl.classList.add('pw-fly-l'); }
+    if (!R.alive && !b._rDead && rEl) { b._rDead=true; rEl.classList.add('pw-fly-r'); }
   },
 
   _render() {
     const b = this.battle; if (!b) return;
+    if (b.fighters.length === 2) { this._renderDuel(); return; }
     const total = b.fighters.length;
     const alive = b.fighters.filter(f=>f.alive).length;
     const cols  = Math.min(10, total);
