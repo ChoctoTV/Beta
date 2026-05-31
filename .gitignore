@@ -1,21 +1,118 @@
-# Secrets — never commit these
-SECRET.txt
+###############################
+# ChoctoTV — Master .gitignore
+###############################
+
+##########
+# Secrets
+##########
 .env
+.env.*
+secrets.txt
+*.secret
+*.key
+*.pem
+*.p12
+*.keystore
+*.solana
+*.wallet
+*.json.key
+id_rsa
+id_ed25519
 
-# Runtime data
-data/
+#################
+# Sensitive dirs
+#################
+vault/
 logs/
-.pids/
-*.log
-*.pid
+cache/
+tmp/
+temp/
+sessions/
+backups/
+crashdumps/
 
-# Dependencies
+########################
+# Workzone / Testzone
+########################
+workzone/
+testzone/
+sandbox/
+localdev/
+
+########################
+# Node / TypeScript
+########################
 node_modules/
+dist/
+build/
+.npm/
+.npm-cache/
+.pnpm-store/
+bun.lockb
+*.tsbuildinfo
 
-# Music files (add your own)
-music/*.mp3
-music/*.wav
+########################
+# Python
+########################
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
 
-# OS
+########################
+# OS / Editor junk
+########################
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# JetBrains
+.idea/
+*.iml
+
+########################
+# Git / Repo safety
+########################
+*.orig
+*.rej
+*.patch
+*.diff
+*.bak
+*.swp
+*.swo
+
+########################
+# Build artifacts
+########################
+coverage/
+reports/
+out/
+release/
+bin/
+obj/
+
+########################
+# Containers / Cloud
+########################
+docker-data/
+docker-compose.override.yml
+*.pid
+*.sock
+
+########################
+# ChoctoTV Runtime
+########################
+runtime/
+sessions/
+userdata/
+streamcache/
+eventcache/
+rewardcache/

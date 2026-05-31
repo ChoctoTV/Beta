@@ -1,27 +1,31 @@
 {
   "name": "choctotv",
   "version": "3.0.0",
-  "description": "ChoctoTV — 24/7 Twitch overlay game engine",
+  "description": "ChoctoTV \u2014 24/7 Twitch overlay game engine",
   "main": "app.js",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
-    "start":   "node app.js",
-    "test":    "jest --runInBand",
+    "start": "node app.js",
+    "test": "jest --runInBand",
     "migrate": "node scripts/migrate.js"
   },
   "dependencies": {
-    "tmi.js":         "^1.8.5",
-    "better-sqlite3": "^9.4.3",
-    "pino":           "^9.2.0",
-    "pino-pretty":    "^11.2.1",
-    "dotenv":         "^16.4.5",
-    "ws":             "^8.17.0"
+    "tmi.js": "^1.8.5",
+    "better-sqlite3": "^11.0.0",
+    "pino": "^9.2.0",
+    "pino-pretty": "^11.2.1",
+    "dotenv": "^16.4.5",
+    "ws": "^8.17.0"
   },
   "devDependencies": {
     "jest": "^29.7.0"
   },
   "jest": {
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.js"]
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
   }
 }

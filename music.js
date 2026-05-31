@@ -95,6 +95,26 @@ function connectIPC(attempts=0) {
   });
   let buf = '';
   _ipc.on('data', d => {
+    // Detect track start and broadcast cleaned filename
+    try {
+      const lines = d.toString().trim().split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        if (msg.event === 'file-loaded') {
+          // Request filename from mpv
+          if (_ipc && _ipc.writable) {
+            _ipc.write(JSON.stringify({command:['get_property','filename/no-ext'],'request_id':999}) + '\n');
+          }
+        }
+        if (msg.request_id === 999 && msg.data) {
+          const raw = msg.data.replace(/\.mp3$|\.wav$|\.flac$|\.ogg$/i,'');
+          if (_broadcast) _broadcast({ type:'music_track', track: raw });
+          console.log('[Music] Now playing:', raw);
+        }
+      }
+    } catch {}
+
     buf += d.toString();
     let idx;
     while ((idx = buf.indexOf('\n')) >= 0) {

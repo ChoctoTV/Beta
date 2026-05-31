@@ -12,7 +12,7 @@ const https   = require('https');
 const http    = require('http');
 const crypto  = require('crypto');
 const os      = require('os');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, 'vault', '.env') });
 
 // Decrypt any enc: values from old encrypted .env setup
 function parseSecrets(text) {
@@ -83,7 +83,7 @@ function parseSecrets(text) {
 
 const PORT_PUPCORE = parseInt(process.env.PUPCORE_PORT || '3002');
 const HELIUS_KEY   = process.env.HELIUS_API_KEY || '';
-const DATA_DIR     = path.join(__dirname, 'vault', 'data');
+const DATA_DIR     = path.join(__dirname, 'assets', 'vault', 'data');
 const MPL_CORE     = process.env.MPL_CORE_PROGRAM || 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d'; // Metaplex Core — public, same for everyone
 // Choctobits → Choctopus conversion rate
 const CHOCT_RATE      = 1000;   // 1000 Choctobits = 1 Choctopus token

@@ -6,7 +6,7 @@
 // You send as the streamer (your channel name).
 // The game receives it identically to a real Twitch chat message.
 
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, 'vault', '.env') });
 
 const http     = require('http');
 const readline = require('readline');

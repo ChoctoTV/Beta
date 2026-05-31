@@ -5,7 +5,7 @@
 // Shows live CPU, RAM, GPU usage + per-service stats
 // Updates every 2 seconds. Press Q or Ctrl+C to exit.
 
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, 'vault', '.env') });
 const { execSync, spawnSync } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
@@ -149,6 +149,9 @@ function fetchHealth() {
   req.end();
 }
 
+
+
+
 // ── FFmpeg / Chrome PIDs (not tracked by our pid files) ──────────────────────
 function findPid(pattern) {
   const r = run(`pgrep -f "${pattern}" | head -1`);
@@ -236,20 +239,64 @@ function render() {
     lines.push(`  ${C.yl}App not reachable on port ${parseInt(process.env.API_PORT||'3000')}${C.nc}`);
   }
 
-  // ── Output (overwrite in place) ───────────────────────────────────────────
+  lines.push('');
+
+
+
+  lines.push('');
+
+  // ── Errors (per-component error counts since startup) ─────────────────────
+  // Sourced from appHealth.counters['choctotv_errors_total{service="X"}']
+  lines.push(`${C.cy}  ERRORS (since startup)${C.nc}`);
+  if (appHealth && appHealth.counters) {
+    const errCounts = {};
+    for (const [key, val] of Object.entries(appHealth.counters)) {
+      const m = key.match(/^choctotv_errors_total\{service="([^"]+)"\}$/);
+      if (m) errCounts[m[1]] = val;
+    }
+    const entries = Object.entries(errCounts).sort((a, b) => b[1] - a[1]);
+    if (entries.length === 0) {
+      lines.push(`  ${C.gr}● No errors recorded${C.nc}`);
+    } else {
+      for (const [svc, count] of entries.slice(0, 8)) {
+        const col = count > 10 ? C.rd : count > 3 ? C.yl : C.dm;
+        lines.push(`  ${pad(svc, 24)}${col}${rpad(count, 6)}${C.nc}`);
+      }
+    }
+    // Show the 3 most recent error messages
+    if (appHealth.recentErrors && appHealth.recentErrors.length > 0) {
+      lines.push(`  ${C.dm}── recent ──${C.nc}`);
+      for (const e of appHealth.recentErrors.slice(0, 3)) {
+        const t   = e.ts ? e.ts.slice(11, 19) : '??:??:??';
+        const svc = (e.service || '?').slice(0, 12);
+        const msg = (e.message || '').slice(0, 60);
+        lines.push(`  ${C.dm}${t}${C.nc} ${C.yl}${pad(svc, 13)}${C.nc}${C.dm}${msg}${C.nc}`);
+      }
+    }
+  } else {
+    lines.push(`  ${C.dm}(app not reachable — cannot read error counts)${C.nc}`);
+  }
+
+  // ── Output (clear screen each frame to avoid residual text) ───────────────
+  // Each line is padded with ANSI clear-to-end-of-line (\x1b[K) so any leftover
+  // characters from previous frames get wiped.
+  const CLR_EOL = '\x1b[K';
+  const out = lines.map(l => l + CLR_EOL).join('\n') + CLR_EOL + '\n';
   if (firstRender) {
     process.stdout.write(C.clear);
     firstRender = false;
   } else {
-    process.stdout.write(C.up(lines.length + 1));
+    process.stdout.write('\x1b[H');  // move cursor to top-left without clearing
   }
-  process.stdout.write(lines.join('\n') + '\n');
+  process.stdout.write(out);
+  // Wipe anything below the final line (clear from cursor to end of screen)
+  process.stdout.write('\x1b[J');
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 fetchHealth();
 render();
-const timer    = setInterval(render, INTERVAL);
+const timer       = setInterval(render, INTERVAL);
 const apiTimer = setInterval(fetchHealth, 5000);
 
 process.on('SIGINT',  () => { clearInterval(timer); clearInterval(apiTimer); console.log('\n'); process.exit(0); });

@@ -1,0 +1,9 @@
+{
+  "main": [
+    "./assets/billboard/main/adspace.jpg",
+    "./assets/billboard/main/billboard(1).png",
+    "./assets/billboard/main/billboard.png",
+    "./assets/billboard/main/image.png"
+  ],
+  "ads": []
+}

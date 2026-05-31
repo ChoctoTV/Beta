@@ -15,9 +15,19 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PIDS="$DIR/.pids"
-LOGS="$DIR/logs"
+PIDS="$DIR/data/.pids"
+LOGS="$DIR/data/logs"
 mkdir -p "$PIDS" "$LOGS"
+
+# ── Legacy: auto-copy alternate-named env files → .env if .env missing ───────
+for SECRET_SRC in "$DIR/vault.env" "$DIR/.vault.env" "$DIR/teller.env"; do
+  if [ -f "$SECRET_SRC" ] && [ ! -f "$DIR/vault/.env" ]; then
+    echo "[start.sh] Found $(basename $SECRET_SRC) → copying to vault/.env"
+    cp "$SECRET_SRC" "$DIR/vault/.env"
+    break
+  fi
+done
+
 
 GR='\033[0;32m'; YL='\033[0;33m'; RD='\033[0;31m'
 CY='\033[0;36m'; WT='\033[1;37m'; DM='\033[2m'; NC='\033[0m'
@@ -31,16 +41,16 @@ hdr()  { echo -e "\n${WT}$*${NC}"; }
 # ── Load Secret file directly (before services start) ──────────────────────────
 load_secret() {
   local sf=""
-  for candidate in "$DIR/Secret(live).txt" "$DIR/Secret(beta).txt"; do
-    [[ -f "$candidate" ]] && sf="$candidate" && break
-  done
-  if [[ -z "$sf" ]]; then
-    for f in "$DIR"/[Ss]ecret*.txt; do [[ -f "$f" ]] && sf="$f" && break; done
-  fi
-  if [[ -z "$sf" ]]; then
-    for candidate in "$DIR/vault/Secret(live).txt" "$DIR/vault/Secret(beta).txt"; do
+  # Allow override via env var (used by 'start.sh test')
+  if [[ -n "${CHOCTOTV_SECRET_FILE:-}" && -f "$CHOCTOTV_SECRET_FILE" ]]; then
+    sf="$CHOCTOTV_SECRET_FILE"
+  else
+    for candidate in "$DIR/vault/secret.txt" "$DIR/vault/Secret.txt" "$DIR/vault/Secret(live).txt" "$DIR/vault/Secret(beta).txt"; do
       [[ -f "$candidate" ]] && sf="$candidate" && break
     done
+    if [[ -z "$sf" ]]; then
+      for f in "$DIR"/[Ss]ecret*.txt; do [[ -f "$f" ]] && sf="$f" && break; done
+    fi
   fi
   if [[ -n "$sf" ]]; then
     set -a
@@ -55,7 +65,7 @@ load_secret() {
 
 # ── Load .env ──────────────────────────────────────────────────────────────────
 load_env() {
-  [[ -f "$DIR/.env" ]] || return 0
+  [[ -f "$DIR/vault/.env" ]] || return 0
   while IFS='=' read -r key rest; do
     # Skip blank lines, comments, and keys that aren't valid shell identifiers
     [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
@@ -63,7 +73,7 @@ load_env() {
     # Skip values that look like URLs (contain ://) — these break bash source
     [[ "$rest" =~ :// ]] && continue
     export "${key}=${rest}"
-  done < "$DIR/.env"
+  done < "$DIR/vault/.env"
 }
 
 # ── Kill a PID file ────────────────────────────────────────────────────────────
@@ -330,12 +340,57 @@ start_watchdog() {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  First-run bootstrap: if node_modules or .bootstrapped missing, run firststart.sh
+# ─────────────────────────────────────────────────────────────────────────────
+_do_bootstrap() {
+  local mode="${1:-}"
+  if [[ ! -f "$DIR/.bootstrapped" || ! -d "$DIR/node_modules" ]]; then
+    if [[ ! -f "$DIR/firststart.sh" ]]; then
+      err "firststart.sh not found — cannot bootstrap"
+      exit 1
+    fi
+    info "First run detected — running bootstrap..."
+    bash "$DIR/firststart.sh" "$mode"
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Main dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 case "${1:-start}" in
+  test)
+    _do_bootstrap test
+    if [[ ! -f "$DIR/vault/testzone.txt" ]]; then
+      echo -e "${RD}  ✗${NC} testzone.txt not found — unzip vault.zip first"
+      exit 1
+    fi
+    export CHOCTOTV_SECRET_FILE="$DIR/vault/testzone.txt"
+    echo -e "${YL}  ⚠${NC} TEST MODE — loading testzone.txt"
+    exec "$0" start
+    ;;
   stop)     stop_all; exit 0 ;;
   restart)  stop_all; sleep 1 ;;
   status)   show_status; exit 0 ;;
+  reload)
+    # Hot-reload commands without restarting: POST to running app
+    SVC="${2:-commands}"
+    if [[ "$SVC" == "commands" || "$SVC" == "cmd" ]]; then
+      if curl -sf -X POST http://localhost:${API_PORT:-3000}/admin/reload -o /dev/null; then
+        ok "Commands hot-reloaded"
+      else
+        err "Could not reach app — is it running? (./start.sh status)"
+      fi
+    elif [[ "$SVC" == "teller" ]]; then
+      info "Restarting teller..."
+      kill_pid teller 2>/dev/null || true
+      pkill -TERM -f "node $DIR/teller.js" 2>/dev/null || true
+      sleep 1
+      start_svc teller "node $DIR/teller.js"
+      ok "Teller restarted"
+    else
+      echo "Usage: ./start.sh reload [commands|teller]"
+    fi
+    exit 0 ;;
   setup)    exec node "$DIR/setup.js" ;;
   viewer)
     # Pass streamBuffer=0 so preview shows animations instantly (no stream delay)
@@ -374,7 +429,7 @@ case "${1:-start}" in
     exit 0 ;;
   verifyenv)
     SECRET_FILE=""
-    for c in "Secret(live).txt" "Secret(beta).txt" "Secret.txt"; do
+    for c in "vault/secret.txt" "vault/Secret.txt" "vault/Secret(live).txt" "vault/Secret(beta).txt"; do
       [ -f "$DIR/$c" ] && { SECRET_FILE="$DIR/$c"; break; }
     done
     if [ -z "$SECRET_FILE" ]; then
@@ -441,15 +496,15 @@ case "${1:-start}" in
     exit 0 ;;
 
   resetenv)
-    DEST="$DIR/Secret(live).txt"
+    DEST="$DIR/vault/secret.txt"
     if [ -f "$DEST" ]; then
-      read -rp "Secret(live).txt exists — overwrite? [y/n]: " ans < /dev/tty
+      read -rp "secret.txt exists — overwrite? [y/n]: " ans < /dev/tty
       [[ "$ans" != "y" && "$ans" != "Y" ]] && { echo "Cancelled."; exit 0; }
       cp "$DEST" "${DEST}.bak.$(date +%s)"
       ok "Backed up existing file"
     fi
     cp "$DIR/Secret.template.txt" "$DEST"
-    ok "Created fresh Secret(live).txt — fill in values then run ./start.sh verifyenv"
+    ok "Created fresh secret.txt — fill in values then run ./start.sh verifyenv"
     exit 0 ;;
 
   verifytoken)
@@ -481,16 +536,65 @@ case "${1:-start}" in
 
   updatescopes)
     info "Stopping app to refresh Twitch OAuth..."
-    kill_pid app 2>/dev/null || true; pkill -TERM -f "node $DIR/app.js" 2>/dev/null || true; sleep 1
+    kill_pid app 2>/dev/null || true; pkill -TERM -f "node $DIR/src/app.js" 2>/dev/null || true; sleep 1
     load_env
     export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" --silent
-    node "$DIR/scripts/updatescopes.js"
+    node "$DIR/src/scripts/updatescopes.js"
     echo ""; ok "Run ./start.sh to restart with the new token"
     exit 0 ;;
 
-  start|"") ;;
+  start|"") _do_bootstrap ;;
   *) echo "Usage: ./start.sh [start|stop|restart|status|setup|viewer|chat|monitor|session|update|rollback|deploy|kill|verifyenv|resetenv|updatescopes]"; exit 1 ;;
 esac
+
+
+# ── Mirror secret.txt / testzone.txt → .env so every process reads the same values ──
+# secret.txt (or testzone.txt for test mode) is the human-friendly editor;
+# .env is what every node process actually loads via dotenv.
+_sf="${CHOCTOTV_SECRET_FILE:-}"
+if [[ -z "$_sf" ]]; then
+  for _c in "$DIR/vault/secret.txt" "$DIR/vault/Secret.txt"; do
+    [[ -f "$_c" ]] && _sf="$_c" && break
+  done
+fi
+if [[ -n "$_sf" ]]; then
+  mkdir -p "$DIR/vault"
+  cp "$_sf" "$DIR/vault/.env"
+fi
+
+# ── Generate webhook JSON configs from env vars ────────────────────────────────
+# Reads TIPBOT_WEBHOOK_URL + auth from vault/.env and writes the two JSON files
+# that Teller.js uses at runtime.  These files are gitignored (vault/*).
+node "$DIR/src/scripts/genWebhookConfigs.js"
+
+# ── Write billboard manifest (static JSON read by browser, no server call needed) ──
+node -e "
+const fs   = require('fs');
+const path = require('path');
+const base = path.join('$DIR', 'vault', 'billboard');
+['main','ads','review'].forEach(d => fs.mkdirSync(path.join(base,d),{recursive:true}));
+const isImg = f => !/\.(txt|md|json|js|sh|log)$/i.test(f) && !f.startsWith('.');
+const main = fs.readdirSync(path.join(base,'main')).filter(isImg).sort()
+  .map(f => './assets/billboard/main/' + encodeURIComponent(f));
+const ads  = fs.readdirSync(path.join(base,'ads')).filter(isImg).sort()
+  .map(f => './assets/billboard/ads/'  + encodeURIComponent(f));
+fs.writeFileSync(path.join(base,'manifest.json'), JSON.stringify({main,ads},null,2));
+console.log('[start.sh] billboard manifest: main=' + main.length + ' ads=' + ads.length);
+" 2>&1
+
+
+# ── Ensure billboard subfolders exist ────────────────────────────────────────
+mkdir -p "$DIR/vault/billboard/main"
+mkdir -p "$DIR/vault/billboard/ads"
+mkdir -p "$DIR/vault/billboard/review"
+
+# ── Auto-install assets.zip if present in project root ───────────────────────
+# Drop assets.zip (matching the filetree from project root) into the folder
+# before running start.sh and it will be extracted automatically on launch.
+if [[ -f "$DIR/assets.zip" ]]; then
+  echo "[start.sh] assets.zip found — extracting assets to project..."
+  unzip -o "$DIR/assets.zip" -d "$DIR" >> "$LOGS/app.log" 2>&1     && echo "[start.sh] ✓ assets installed from assets.zip"     || echo "[start.sh] ⚠ assets.zip extraction had errors — check logs/app.log"
+fi
 
 # ── Check setup has been run ───────────────────────────────────────────────────
 load_env
@@ -507,11 +611,12 @@ ensure_clean() {
   for svc in app stream music pupcore teller; do kill_pid "$svc" 2>/dev/null || true; done
 
   # 2. Kill by process name (catches anything that didn't write a PID file)
-  pkill -TERM -f "node $DIR/app.js"     2>/dev/null || true
+  pkill -TERM -f "node $DIR/src/app.js"     2>/dev/null || true
   pkill -TERM -f "node $DIR/pupcore.js" 2>/dev/null || true
   pkill -TERM -f "node $DIR/teller.js"  2>/dev/null || true
   pkill -TERM -f "node $DIR/music.js"   2>/dev/null || true
   pkill -TERM -f "node $DIR/stream.js"  2>/dev/null || true
+  kill_pid backup 2>/dev/null || true
   pkill -TERM -f "node $DIR/monitor.js" 2>/dev/null || true
   pkill -TERM -x mpv 2>/dev/null || true   # kill any stray music player
 
@@ -519,11 +624,12 @@ ensure_clean() {
   sleep 2
 
   # 4. Force-kill anything still alive
-  pkill -KILL -f "node $DIR/app.js"     2>/dev/null || true
+  pkill -KILL -f "node $DIR/src/app.js"     2>/dev/null || true
   pkill -KILL -f "node $DIR/pupcore.js" 2>/dev/null || true
   pkill -KILL -f "node $DIR/teller.js"  2>/dev/null || true
   pkill -KILL -f "node $DIR/music.js"   2>/dev/null || true
   pkill -KILL -f "node $DIR/stream.js"  2>/dev/null || true
+  kill_pid backup 2>/dev/null || true
   pkill -KILL -x mpv 2>/dev/null || true   # force-kill stray mpv
 
   # 5. Free all required ports — wait until confirmed clear
@@ -589,7 +695,7 @@ hdr "━━━━━━━━━━━━━━━━━━━━━━━━━
 # ── Launch services ────────────────────────────────────────────────────────────
 launch pupcore pupcore.js pupcore.log 2
 launch teller  teller.js  teller.log 1
-launch app     app.js     app.log    3
+launch app     src/app.js app.log    3
 launch music   music.js   music.log  1
 launch stream  stream.js  stream.log 2
 
@@ -655,5 +761,36 @@ trap cleanup SIGINT SIGTERM
 
 # ── Watchdog in background ────────────────────────────────────────────────────
 start_watchdog &
+
+
+# ── Hourly DB backup ──────────────────────────────────────────────────────────
+# Zips all .db files every hour into backups/db_YYYY-MM-DD_HH-MM.zip
+# Keeps the last 168 backups (7 days × 24 hrs). Runs silently in background.
+BACKUP_DIR="$DIR/backups"
+mkdir -p "$BACKUP_DIR"
+(
+  while true; do
+    sleep 3600
+    _ts=$(date +"%Y-%m-%d_%H-%M")
+    _out="$BACKUP_DIR/db_${_ts}.zip"
+    # Find all .db files and zip them
+    _dbs=$(find "$DIR" -maxdepth 3 -name "*.db" ! -path "*/node_modules/*" 2>/dev/null)
+    if [[ -n "$_dbs" ]]; then
+      echo "$_dbs" | xargs zip -q "$_out" 2>/dev/null \
+        && echo "[backup] DB snapshot → $(basename $_out)" >> "$LOGS/backup.log" \
+        || echo "[backup] WARNING: db zip failed at $_ts" >> "$LOGS/backup.log"
+    fi
+    # Keep only the last 168 db backups (7 days)
+    ls -t "$BACKUP_DIR"/db_*.zip 2>/dev/null | tail -n +169 | xargs rm -f 2>/dev/null
+
+    # Assets backup — single overwritten file (assets change rarely; no need to timestamp)
+    if [[ -d "$DIR/vault" ]]; then
+      zip -qr "$BACKUP_DIR/assets.zip" "$DIR/vault/" --exclude "*.log" 2>/dev/null \
+        && echo "[backup] assets.zip updated at $_ts" >> "$LOGS/backup.log" \
+        || echo "[backup] WARNING: assets zip failed at $_ts" >> "$LOGS/backup.log"
+    fi
+  done
+) &
+echo "$!" > "$PIDS/backup.pid"
 
 wait

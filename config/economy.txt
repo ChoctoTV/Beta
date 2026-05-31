@@ -1,0 +1,168 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#   ChoctoTV — Complete Economy & Reward Settings
+#   Format:  key = value    (inline # comments are stripped)
+#   Apply:   !hotfix — reloads this file + restarts only changed services
+#   All values listed. Commented lines use the built-in default shown.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── GAME BASE REWARDS ─────────────────────────────────────────────────────────
+# Final reward = random(min,max) × rarity_mult × bonuses × reward_multiplier
+toss_min  = 3
+toss_max  = 7
+throw_min = 3
+throw_max = 7
+dig_min   = 3
+dig_max   = 7
+walk_min  = 2
+walk_max  = 5
+fish_min  = 3
+fish_max  = 8
+
+# ── RARITY MULTIPLIERS ────────────────────────────────────────────────────────
+# Applied on top of all other bonuses.  Adjust to balance pup value.
+rarity_common_mult    = 1.0
+rarity_rare_mult      = 2.0
+rarity_epic_mult      = 3.0
+rarity_legendary_mult = 5.0
+
+# ── FAV PUP BONUSES ───────────────────────────────────────────────────────────
+# Added to reward multiplier (0.25 = +25%).  Stacks with each other.
+favpup_bonus      = 0.25    # bonus when fav pup is featured in the animation
+favgame_bonus     = 0.10    # extra when pup's daily game matches game played
+favweather_bonus  = 0.10    # extra when pup's daily weather matches stream weather
+# Max combo: favpup + favgame + favweather = +45% before rarity mult
+
+# ── ON-DUTY MOD BOOST ────────────────────────────────────────────────────────
+mod_onduty_boost = 0.10     # +10% for ALL players when a mod is !onduty
+
+# ── GLOBAL MULTIPLIER ────────────────────────────────────────────────────────
+# Multiply all rewards by this value.  Set 2.0 for events, restore to 1.0 after.
+reward_multiplier  = 1.0
+earn_target_hr     = 25000  # rough Choctobits/hr target at normal viewer count
+active_window_min  = 10     # minutes of inactivity before player excluded from scaling
+
+# ── COOLDOWNS (milliseconds) ─────────────────────────────────────────────────
+cooldown_ms      = 8000     # per-user cooldown between earn commands
+sub_cooldown_ms  = 4000     # reduced cooldown for subscribers
+
+# ── ITEM DROPS ───────────────────────────────────────────────────────────────
+sticks_min   = 3
+sticks_max   = 5
+balls_min    = 1
+balls_max    = 3
+moon_chance  = 0.05         # probability of getting a moon per play (0.05 = 5%)
+
+# ── VENDING & FORGING ────────────────────────────────────────────────────────
+vend_sticks_rate = 1        # Choctobits per stick sold
+vend_balls_rate  = 50       # Choctobits per ball sold
+vend_moons_rate  = 200      # Choctobits per moon sold
+vend_min         = 100      # minimum vend amount
+vend_max         = 999      # maximum vend amount
+forge_balls_cost = 100      # sticks required to forge 1 ball
+forge_moons_cost = 100      # balls required to forge 1 moon
+
+# ── LURK ─────────────────────────────────────────────────────────────────────
+lurk_duration_hr  = 8       # maximum hours a lurk session lasts
+lurk_reward_mult  = 0.33    # fraction of active rate earned while lurking (33%)
+
+# ── CHEST (!lick game) ────────────────────────────────────────────────────────
+chest_min_lock = 50         # minimum clicks needed to pop chest
+chest_max_lock = 500        # maximum clicks needed to pop chest
+
+# ── GBM (Good / Ball / Moon) ─────────────────────────────────────────────────
+gbm_round_min  = 10         # minutes between auto-reveals (0 = manual !gbmreveal only)
+gbm_win_reward = 0          # Choctobits bonus to each winner (0 = bragging rights only)
+gbm_tie_reward = 1          # Choctobits on a tie
+
+# ── AIRDROP ──────────────────────────────────────────────────────────────────
+airdrop_min          = 1000
+airdrop_max          = 25000
+airdrop_mod_budget   = 5000    # free airdrop budget per mod per day
+airdrop_dev_budget   = 25000   # free airdrop budget per dev per day
+airdrop_window_min   = 60      # only viewers active in last N minutes receive airdrop
+
+# ── LOTTERY PRIZES ───────────────────────────────────────────────────────────
+lotto_common_prize   = 100     # 1 digit position match
+lotto_rare_prize     = 500     # 2 digit position matches
+lotto_epic_prize     = 2000    # 3 digit position matches
+lotto_jackpot_prize  = 10000   # all 4 digit positions match
+
+# ── MUSIC & STREAM ───────────────────────────────────────────────────────────
+music_volume    = 50            # default volume 0-100
+music_enabled   = 1             # 1 = music enabled on start (0 = off until !music on)
+autopilot_sec   = 45            # seconds of silence before autopilot kicks in
+weather_min_ms  = 900000        # minimum ms between weather changes (900000 = 15 min)
+
+# ── CHANNEL POINTS ────────────────────────────────────────────────────────────
+# Twitch channel point costs per action (requires channel:read:redemptions scope)
+# Rewards auto-created as "ChoctoTV Walk", "ChoctoTV Toss" etc on startup
+# Set cp_auto_create = 0 to manage rewards manually in Twitch dashboard
+cp_auto_create  = 1
+cp_cost_walk    = 5
+cp_cost_toss    = 2
+cp_cost_throw   = 2
+cp_cost_dig     = 2
+cp_cost_fish    = 3
+cp_cost_lurk    = 1
+cp_cost_lick    = 1
+
+# ── STREAM SYNC ───────────────────────────────────────────────────────────────
+# Milliseconds to delay overlay animations to match Twitch stream latency.
+# Twitch Low Latency mode: ~3000   (3 seconds)
+# Twitch Normal mode:      ~10000  (10 seconds)
+# Local testing / viewer preview: 0 (instant)
+stream_buffer_ms = 3000
+
+# ── POST-AD AIRDROP ───────────────────────────────────────────────────────────
+# Post-ad airdrop tiers (requires channel:read:ads scope):
+#   active viewers get the base amount, lurkers get a % of it, subs get a bonus %
+ad_airdrop_amount        = 1     # base 🍫 per active viewer (0 to disable)
+ad_airdrop_lurker_pct    = 33    # lurkers receive 33% of base
+ad_airdrop_sub_bonus_pct = 25    # subscribers receive +25%
+
+# ── Billboard slideshow ────────────────────────────────────────────────────────
+# Seconds between image rotations on the billboard.
+# billboard_interval_sec = 30
+
+
+# ── Economy pool (dynamicRewards.js) ──────────────────────────────────────────
+# rewards_pool_total = 5000000
+# hourly_grind_target = 25000
+# hourly_lurk_target = 8000
+# choctobits_per_token = 1000
+# snapshot_day = 1
+# min_pool_reserve = 100000
+# congestion_threshold = 200
+
+
+# ── Channel Points ────────────────────────────────────────────────────────────
+# Auto-create Twitch channel point rewards on startup
+# Requires channel:manage:redemptions scope in your Twitch OAuth token.
+# Set to 0 to disable auto-creation and manage rewards manually.
+cp_auto_create         = 1
+
+# Costs are tuned so a viewer earning ~150 pts/hr can use each command
+# at its maximum cooldown rate. Typing the command in chat and clicking
+# the channel point reward share the SAME cooldown window — both count.
+#
+# 60-second cooldowns (toss/throw/dig/fish):
+#   ~150 pts/hr ÷ 60 actions/hr = ~2.5 pts/action → 10 pts (some buffer)
+cp_cost_toss           = 10
+cp_cost_throw          = 10
+cp_cost_dig            = 10
+cp_cost_fish           = 10
+#
+# 180-second cooldown (walk):
+#   ~150 pts/hr ÷ 20 actions/hr = ~7.5 pts/action → 25 pts
+cp_cost_walk           = 25
+#
+# Other viewer commands
+cp_cost_lick           = 5
+cp_cost_lurk           = 10
+cp_cost_battle         = 50
+cp_cost_gauntlet       = 50
+cp_cost_gbm            = 10
+#
+# One-time setup — higher cost prevents abuse
+cp_cost_setwallet      = 500
+cp_cost_setfav         = 500

@@ -1,6 +1,6 @@
 'use strict';
 // stream.js — Xvfb → Chromium → FFmpeg → Twitch RTMP pipeline
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, 'vault', '.env') });
 
 // Decrypt any enc: values left in .env from the old encrypted setup
 (function decryptLegacy() {
